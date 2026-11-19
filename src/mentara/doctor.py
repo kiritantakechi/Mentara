@@ -1,4 +1,4 @@
-"""Cross-platform environment and Mental Omega overlay diagnostics."""
+"""Cross-platform host environment and virtual overlay diagnostics."""
 
 import os
 import shutil
@@ -9,13 +9,7 @@ from pathlib import Path
 from mentara.config import BackendKind, PlatformKind, ResolvedProfile
 from mentara.errors import OverlayError
 from mentara.overlay import plan_profile
-from mentara.patcher import read_ini_section
-from mentara.planner import (
-    EntryOrigin,
-    FileEntry,
-    OverlayPlan,
-    render_entry_text,
-)
+from mentara.planner import OverlayPlan, validate_synthesized_entry
 from mentara.runner import (
     extract_command_binaries,
     resolve_command_binary,
@@ -27,21 +21,6 @@ __all__ = [
     "Severity",
     "run_doctor",
 ]
-
-_CORE_FILES: tuple[str, ...] = (
-    "gamemd.exe",
-    "Syringe.exe",
-    "MentalOmegaClient.exe",
-    "Ares.dll",
-    "BINKW32.DLL",
-    "Blowfish.dll",
-    "ra2.mix",
-    "ra2md.mix",
-    "language.mix",
-    "langmd.mix",
-)
-_CLIENT_DEFINITIONS_PATH = Path("Resources/ClientDefinitions.ini")
-_CLIENT_EXE_FOLDED = "mentalomegaclient.exe"
 
 
 class Severity(StrEnum):
@@ -80,7 +59,7 @@ class DoctorReport:
 
 
 def run_doctor(profile: ResolvedProfile) -> DoctorReport:
-    """Inspect host tools, directories, and Mental Omega overlay rules.
+    """Inspect host tools, directories, and virtual overlay integrity.
 
     Args:
         profile: Resolved launcher profile to diagnose.
@@ -104,12 +83,9 @@ def run_doctor(profile: ResolvedProfile) -> DoctorReport:
             diagnostics=tuple(diagnostics),
         )
 
-    _check_core_files(plan, diagnostics)
     _check_target_executable(profile, plan, diagnostics)
     _check_case_collisions(plan, diagnostics)
     _check_patches(plan, diagnostics)
-    _check_forbidden_files(profile, plan, diagnostics)
-    _check_syringeex_client_defs(profile, plan, diagnostics)
 
     return DoctorReport(
         profile_name=profile.name,
@@ -126,7 +102,7 @@ def _check_base_dir(
             Diagnostic(
                 "base-dir",
                 Severity.OK,
-                f"Base game directory found: {profile.base_dir}",
+                f"Base directory found: {profile.base_dir}",
             ),
         )
     else:
@@ -134,7 +110,7 @@ def _check_base_dir(
             Diagnostic(
                 "base-dir",
                 Severity.ERROR,
-                f"Base game directory missing: {profile.base_dir}",
+                f"Base directory missing: {profile.base_dir}",
             ),
         )
 
@@ -148,7 +124,7 @@ def _check_layers(
             Diagnostic(
                 "layers",
                 Severity.OK,
-                "No overlay layers configured (vanilla base view).",
+                "No overlay layers configured (base view only).",
             ),
         )
         return
@@ -279,36 +255,21 @@ def _check_runner(
     )
 
 
-def _check_core_files(
-    plan: OverlayPlan,
-    diagnostics: list[Diagnostic],
-) -> None:
-    missing = [
-        name for name in _CORE_FILES if plan.lookup_case_insensitive(Path(name)) is None
-    ]
-    if missing:
-        diagnostics.append(
-            Diagnostic(
-                "core-files",
-                Severity.WARN,
-                f"Missing expected Mental Omega files: {', '.join(missing)}",
-            ),
-        )
-    else:
-        diagnostics.append(
-            Diagnostic(
-                "core-files",
-                Severity.OK,
-                f"All {len(_CORE_FILES)} core Mental Omega files resolved.",
-            ),
-        )
-
-
 def _check_target_executable(
     profile: ResolvedProfile,
     plan: OverlayPlan,
     diagnostics: list[Diagnostic],
 ) -> None:
+    if not profile.runner.executable:
+        diagnostics.append(
+            Diagnostic(
+                "executable",
+                Severity.ERROR,
+                "No target executable configured for runner.",
+            ),
+        )
+        return
+
     entry = plan.lookup_case_insensitive(Path(profile.runner.executable))
     if entry is None:
         diagnostics.append(
@@ -339,7 +300,7 @@ def _check_case_collisions(
             Diagnostic(
                 "case-collisions",
                 Severity.OK,
-                "No Windows case-only path collisions detected.",
+                "No case-only path collisions detected.",
             ),
         )
         return
@@ -361,13 +322,13 @@ def _check_patches(
     plan: OverlayPlan,
     diagnostics: list[Diagnostic],
 ) -> None:
-    patched = plan.patched_entries()
-    if not patched:
+    synthesized = plan.synthesized_entries()
+    if not synthesized:
         return
 
-    for entry in patched:
+    for entry in synthesized:
         try:
-            _ = render_entry_text(entry)
+            validate_synthesized_entry(entry)
         except OverlayError as exc:
             diagnostics.append(
                 Diagnostic(
@@ -382,110 +343,6 @@ def _check_patches(
         Diagnostic(
             "patches",
             Severity.OK,
-            f"All {len(patched)} text-patched file(s) validated cleanly.",
+            f"All {len(synthesized)} synthesized/patched file(s) validated cleanly.",
         ),
     )
-
-
-def _check_forbidden_files(
-    profile: ResolvedProfile,
-    plan: OverlayPlan,
-    diagnostics: list[Diagnostic],
-) -> None:
-    if Path(profile.runner.executable).name.casefold() != _CLIENT_EXE_FOLDED:
-        return
-
-    client_defs = plan.lookup_case_insensitive(_CLIENT_DEFINITIONS_PATH)
-    if client_defs is None:
-        return
-
-    forbidden = _read_forbidden_files(client_defs)
-    if not forbidden:
-        return
-
-    flagged: list[str] = []
-    for entry in plan.overrides():
-        if entry.origin is not EntryOrigin.LAYER:
-            continue
-        if entry.relative_path.as_posix().casefold() in forbidden:
-            flagged.append(entry.relative_path.as_posix())
-
-    if flagged:
-        names = ", ".join(sorted(flagged))
-        diagnostics.append(
-            Diagnostic(
-                "forbidden-files",
-                Severity.WARN,
-                f"Overlay provides files blocked by ClientDefinitions.ini "
-                f"ForbiddenFiles ({names}). Override "
-                f"Resources/ClientDefinitions.ini or launch via Syringe.exe.",
-            ),
-        )
-
-
-def _check_syringeex_client_defs(
-    profile: ResolvedProfile,
-    plan: OverlayPlan,
-    diagnostics: list[Diagnostic],
-) -> None:
-    if Path(profile.runner.executable).name.casefold() != _CLIENT_EXE_FOLDED:
-        return
-
-    syringe = plan.lookup_case_insensitive(Path("Syringe.exe"))
-    client_defs = plan.lookup_case_insensitive(_CLIENT_DEFINITIONS_PATH)
-    if syringe is None or syringe.source_path is None or client_defs is None:
-        return
-    if not _is_syringeex_binary(syringe.source_path):
-        return
-
-    settings = _read_ini_settings(client_defs)
-    if settings is None:
-        return
-
-    launcher_exe = settings.get("gamelauncherexecutablename", "").strip()
-    extra_params = settings.get("extracommandlineparams", "")
-    if launcher_exe or "--args=" not in extra_params:
-        diagnostics.append(
-            Diagnostic(
-                "syringeex-client-defs",
-                Severity.WARN,
-                "SyringeEx detected, but Resources/ClientDefinitions.ini "
-                "still uses legacy Syringe syntax. Set "
-                "GameExecutableNames=Syringe.exe, clear "
-                "GameLauncherExecutableName, and wrap -SPAWN in "
-                'ExtraCommandLineParams=gamemd.exe --args="-SPAWN ...".',
-            ),
-        )
-        return
-
-    diagnostics.append(
-        Diagnostic(
-            "syringeex-client-defs",
-            Severity.OK,
-            "Resources/ClientDefinitions.ini is migrated for SyringeEx.",
-        ),
-    )
-
-
-def _is_syringeex_binary(path: Path) -> bool:
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return False
-    return b"SyringeEx" in data
-
-
-def _read_forbidden_files(entry: FileEntry) -> frozenset[str]:
-    settings = _read_ini_settings(entry)
-    if settings is None:
-        return frozenset()
-    raw = settings.get("forbiddenfiles", "")
-    return frozenset(item.strip().casefold() for item in raw.split(",") if item.strip())
-
-
-def _read_ini_settings(entry: FileEntry) -> frozendict[str, str] | None:
-    try:
-        text = render_entry_text(entry)
-    except OverlayError:
-        return None
-    return read_ini_section(text, "Settings")

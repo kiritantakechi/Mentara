@@ -56,7 +56,7 @@ def extract_command_binaries(command: Sequence[str]) -> tuple[str, ...]:
     """Extract every executable token from a wrapper command chain.
 
     The leading token and any token immediately following a `--`
-    separator (such as `gamescope ... -- umu-run`) are treated as
+    separator (such as `wrapper-a ... -- wrapper-b`) are treated as
     executables that must exist on the host.
 
     Args:

@@ -1,4 +1,4 @@
-"""Mentara: cross-platform virtual overlay launcher for Mental Omega."""
+"""Mentara: cross-platform virtual overlay workspace and launcher."""
 
 from mentara.cli import main
 from mentara.config import (
@@ -11,7 +11,6 @@ from mentara.config import (
     ResolvedProfile,
     ResolvedRunner,
     RunnerConfig,
-    RunnerOverrideConfig,
     find_config_path,
     load_config,
     resolve_profile,
@@ -23,6 +22,25 @@ from mentara.errors import (
     MountError,
     OverlayError,
     RunnerError,
+)
+from mentara.mix import (
+    LMD_FILENAME,
+    LMD_ID,
+    MIX_PATCH_SUFFIX,
+    MixArchiveSpec,
+    MixEntry,
+    MixFileSpec,
+    MixPatchSpec,
+    MixStrategy,
+    ParsedMix,
+    build_lmd_blob,
+    compose_mix_archive,
+    mix_id,
+    open_mix_archive,
+    parse_lmd_blob,
+    read_mix_entry_bytes,
+    render_mix_member_text,
+    signed_id,
 )
 from mentara.overlay import (
     FuseOverlayBackend,
@@ -61,7 +79,6 @@ from mentara.patcher import (
     parse_ini_patch,
     parse_patch_target,
     parse_toml_patch,
-    read_ini_section,
 )
 from mentara.planner import (
     CaseCollision,
@@ -71,7 +88,10 @@ from mentara.planner import (
     Materialization,
     OverlayPlan,
     build_overlay_plan,
+    materialize_synthesized_entry,
     render_entry_text,
+    render_virtual_text,
+    validate_synthesized_entry,
 )
 from mentara.runner import (
     LaunchResult,
@@ -84,6 +104,9 @@ from mentara.runner import (
 
 __all__ = [
     "INI_PATCH_EXTENSIONS",
+    "LMD_FILENAME",
+    "LMD_ID",
+    "MIX_PATCH_SUFFIX",
     "TOML_PATCH_SUFFIX",
     "AppendText",
     "BackendKind",
@@ -111,11 +134,17 @@ __all__ = [
     "Materialization",
     "MentaraConfig",
     "MentaraError",
+    "MixArchiveSpec",
+    "MixEntry",
+    "MixFileSpec",
+    "MixPatchSpec",
+    "MixStrategy",
     "MountError",
     "MountedWorkspace",
     "OverlayBackend",
     "OverlayError",
     "OverlayPlan",
+    "ParsedMix",
     "PatchKind",
     "PatchSpec",
     "PlatformConfig",
@@ -128,7 +157,6 @@ __all__ = [
     "ResolvedRunner",
     "RunnerConfig",
     "RunnerError",
-    "RunnerOverrideConfig",
     "Severity",
     "SymlinkStagingBackend",
     "TextEdit",
@@ -138,21 +166,31 @@ __all__ = [
     "apply_patch_chain",
     "apply_text_edit",
     "build_launch_spec",
+    "build_lmd_blob",
     "build_overlay_plan",
     "clean_state",
+    "compose_mix_archive",
     "execute_launch",
     "extract_command_binaries",
     "find_config_path",
     "get_backend",
     "load_config",
     "main",
+    "materialize_synthesized_entry",
+    "mix_id",
+    "open_mix_archive",
     "parse_ini_patch",
+    "parse_lmd_blob",
     "parse_patch_target",
     "parse_toml_patch",
     "plan_profile",
-    "read_ini_section",
+    "read_mix_entry_bytes",
     "render_entry_text",
+    "render_mix_member_text",
+    "render_virtual_text",
     "resolve_command_binary",
     "resolve_profile",
     "run_doctor",
+    "signed_id",
+    "validate_synthesized_entry",
 ]

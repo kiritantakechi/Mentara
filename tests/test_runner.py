@@ -9,7 +9,7 @@ from mentara.config import (
     BackendKind,
     MentaraConfig,
     ProfileConfig,
-    RunnerOverrideConfig,
+    RunnerConfig,
     resolve_profile,
 )
 from mentara.errors import RunnerError
@@ -41,7 +41,7 @@ def test_build_launch_spec_expands_templates_and_injects_mentara_env(
         base_dir=str(base_dir),
         runtime_dir=str(tmp_path / "runtime"),
         state_dir=str(tmp_path / "state"),
-        runner=RunnerOverrideConfig(
+        runner=RunnerConfig(
             command=("gamescope", "-f", "--", "umu-run"),
             executable="MentalOmegaClient.exe",
             args=("-CD",),
@@ -111,7 +111,7 @@ def test_execute_launch_runs_script_in_virtual_workspace(
         runtime_dir=str(tmp_path / "runtime"),
         state_dir=str(tmp_path / "state"),
         backend=BackendKind.SYMLINK,
-        runner=RunnerOverrideConfig(
+        runner=RunnerConfig(
             command=(sys.executable,),
             executable="mock_game.py",
             args=("ok",),
@@ -140,7 +140,7 @@ def test_execute_launch_errors_on_missing_executable_or_chained_runner(
         runtime_dir=str(tmp_path / "runtime"),
         state_dir=str(tmp_path / "state"),
         backend=BackendKind.SYMLINK,
-        runner=RunnerOverrideConfig(
+        runner=RunnerConfig(
             command=(sys.executable, "--", "missing-second-stage-binary"),
             executable="MentalOmegaClient.exe",
         ),

@@ -22,7 +22,7 @@ from mentara.planner import (
     Materialization,
     OverlayPlan,
     build_overlay_plan,
-    render_entry_text,
+    materialize_synthesized_entry,
 )
 
 __all__ = [
@@ -49,7 +49,7 @@ _UNMOUNT_RETRY_DELAY_SECONDS = 0.25
 
 @dataclass(frozen=True, slots=True)
 class MountedWorkspace:
-    """Active virtual Mental Omega directory backed by an overlay."""
+    """Active virtual workspace directory backed by an overlay."""
 
     profile_name: str
     backend: BackendKind
@@ -145,13 +145,13 @@ class FuseOverlayBackend:
 
         plan = plan_profile(profile)
         upper_dir, work_dir, ephemeral_root = _prepare_fuse_dirs(profile)
-        patched_entries = plan.patched_entries()
+        synthesized_entries = plan.synthesized_entries()
 
         try:
             lower_list: list[Path] = []
-            if patched_entries:
-                _materialize_patched_files(
-                    patched_entries,
+            if synthesized_entries:
+                _materialize_synthesized_files(
+                    synthesized_entries,
                     target_root=synthesized_dir,
                     upper_dir=profile.upper_dir,
                 )
@@ -603,9 +603,8 @@ def _stage_entry(
     target.parent.mkdir(parents=True, exist_ok=True)
     rel_posix = entry.relative_path.as_posix()
     match entry.materialization:
-        case Materialization.PATCH:
-            rendered = render_entry_text(entry)
-            target.write_text(rendered, encoding="utf-8", newline="")
+        case Materialization.PATCH | Materialization.MIX:
+            materialize_synthesized_entry(entry, target)
             copied_hashes[rel_posix] = _sha256_file(target)
         case Materialization.COPY:
             if entry.source_path is not None:
@@ -666,7 +665,7 @@ def _prepare_fuse_dirs(
     return upper_dir, work_dir, ephemeral_root
 
 
-def _materialize_patched_files(
+def _materialize_synthesized_files(
     entries: Sequence[FileEntry],
     *,
     target_root: Path,
@@ -677,16 +676,14 @@ def _materialize_patched_files(
     target_root.mkdir(parents=True, exist_ok=True)
 
     for entry in entries:
-        rendered = render_entry_text(entry)
         target = target_root / entry.relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(rendered, encoding="utf-8", newline="")
-        if upper_dir is not None and (upper_dir / entry.relative_path).is_file():
-            (upper_dir / entry.relative_path).write_text(
-                rendered,
-                encoding="utf-8",
-                newline="",
-            )
+        materialize_synthesized_entry(entry, target)
+        if (
+            entry.materialization is Materialization.PATCH
+            and upper_dir is not None
+            and (upper_dir / entry.relative_path).is_file()
+        ):
+            shutil.copy2(target, upper_dir / entry.relative_path)
 
 
 def _cleanup_fuse_dirs(

@@ -1,4 +1,4 @@
-"""Command-line interface for the Mentara Mental Omega launcher."""
+"""Command-line interface for the Mentara virtual overlay launcher."""
 
 import argparse
 import json
@@ -20,7 +20,7 @@ from mentara.config import (
     resolve_profile,
 )
 from mentara.doctor import run_doctor
-from mentara.errors import MentaraError, OverlayError
+from mentara.errors import MentaraError
 from mentara.overlay import (
     MountedWorkspace,
     activate_workspace,
@@ -28,7 +28,11 @@ from mentara.overlay import (
     get_backend,
     plan_profile,
 )
-from mentara.planner import matches_any_pattern, render_entry_text
+from mentara.planner import (
+    FileEntry,
+    matches_any_pattern,
+    render_virtual_text,
+)
 from mentara.runner import build_launch_spec, execute_launch
 
 __all__ = ["build_parser", "main"]
@@ -47,8 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mentara",
         description=(
-            "Cross-platform virtual overlay launcher for Mental Omega "
-            "decoupling base game files from custom INI/DLL layers."
+            "Cross-platform virtual overlay launcher decoupling base "
+            "application files from custom configuration and binary layers."
         ),
     )
     parser.add_argument(
@@ -69,13 +73,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     launch_parser = subparsers.add_parser(
         "launch",
-        help="Mount the virtual workspace, run Mental Omega, then clean up.",
+        help="Mount the virtual workspace, run the target, then clean up.",
     )
     _add_profile_flags(launch_parser)
     launch_parser.add_argument(
         "--exe",
         default=None,
-        help="Override target executable (e.g. Syringe.exe).",
+        help="Override target executable inside the virtual workspace.",
     )
     launch_parser.add_argument(
         "--dry-run",
@@ -150,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser(
         "doctor",
-        help="Check host tools, base files, layers, and MO pitfalls.",
+        help="Check host tools, directories, patches, and overlay health.",
     )
     _add_profile_flags(doctor_parser)
 
@@ -427,10 +431,7 @@ def _cmd_render(
     stdout: TextIO,
 ) -> int:
     plan = plan_profile(profile)
-    entry = plan.lookup_case_insensitive(Path(target))
-    if entry is None:
-        raise OverlayError.missing_virtual_file(Path(target))
-    stdout.write(render_entry_text(entry))
+    stdout.write(render_virtual_text(plan, Path(target)))
     return _EXIT_OK
 
 
@@ -475,6 +476,23 @@ def _cmd_inspect(
                         }
                         for spec in entry.patches
                     ],
+                    "mix_patches": [
+                        {
+                            "target": spec.target_name,
+                            "kind": spec.patch.kind.value,
+                            "layer": spec.patch.layer_label,
+                            "source": spec.patch.source_path.name,
+                        }
+                        for spec in entry.mix_patches
+                    ],
+                    "mix_files": [
+                        {
+                            "target": spec.target_name,
+                            "layer": spec.layer_label,
+                            "source": spec.source_path.name,
+                        }
+                        for spec in entry.mix_files
+                    ],
                 }
                 for entry in selected
             ],
@@ -502,15 +520,7 @@ def _cmd_inspect(
             if entry.shadowed_from
             else ""
         )
-        patch_note = (
-            " [patches: "
-            + ", ".join(
-                f"{spec.layer_label}:{spec.source_path.name}" for spec in entry.patches
-            )
-            + "]"
-            if entry.patches
-            else ""
-        )
+        patch_note = _format_patch_note(entry)
         lines.append(
             f"  [{entry.layer_label}] [{entry.materialization.value}] "
             f"{entry.relative_path.as_posix()}{shadow}{patch_note}"
@@ -545,3 +555,29 @@ def _cmd_doctor(
         stderr.write("Doctor detected errors that block launching.\n")
         return _EXIT_ERROR
     return _EXIT_OK
+
+
+def _format_patch_note(entry: FileEntry) -> str:
+    notes: list[str] = []
+    if entry.patches:
+        items = ", ".join(
+            f"{spec.layer_label}:{spec.source_path.name}" for spec in entry.patches
+        )
+        notes.append(f" [patches: {items}]")
+    if entry.mix_patches:
+        items = ", ".join(
+            f"{spec.patch.layer_label}:{spec.target_name}<-{spec.patch.source_path.name}"
+            for spec in entry.mix_patches
+        )
+        notes.append(f" [mix_patches: {items}]")
+    if entry.mix_files:
+        items = ", ".join(
+            f"{spec.layer_label}:{spec.target_name}" for spec in entry.mix_files
+        )
+        notes.append(f" [mix_files: {items}]")
+    if entry.mix_archives:
+        items = ", ".join(
+            f"{spec.layer_label}:{spec.source_path.name}" for spec in entry.mix_archives
+        )
+        notes.append(f" [mix_archives: {items}]")
+    return "".join(notes)

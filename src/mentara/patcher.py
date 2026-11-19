@@ -1,4 +1,4 @@
-"""Text-level and Westwood INI/map/KV overlay patch merging."""
+"""Text-level INI/map/KV and TOML overlay patch merging."""
 
 import tomllib
 from dataclasses import dataclass
@@ -43,10 +43,9 @@ __all__ = [
     "parse_ini_patch",
     "parse_patch_target",
     "parse_toml_patch",
-    "read_ini_section",
 ]
 
-# Directly determinable Westwood INI and key-value formats:
+# Directly determinable INI and key-value text formats:
 # `<stem>.patch.<ext>` targets `<stem>.<ext>`.
 INI_PATCH_EXTENSIONS: Final[tuple[str, ...]] = (
     "ini",
@@ -324,39 +323,8 @@ def parse_patch_target(relative_path: Path) -> tuple[Path, PatchKind] | None:
     return None
 
 
-def read_ini_section(
-    text: str,
-    section: str | None = None,
-) -> frozendict[str, str]:
-    """Read casefolded `key -> value` pairs from a Westwood INI section.
-
-    Args:
-        text: Raw Westwood INI/map/KV document text.
-        section: Section name (case-insensitive), or `None` for root
-            sectionless keys.
-
-    Returns:
-        Immutable mapping from casefolded key names to stripped values.
-    """
-    lines = text.splitlines()
-    body_span = (
-        _root_body_span(lines)
-        if section is None
-        else _find_section_body_span(lines, section)
-    )
-    values: dict[str, str] = {}
-    if body_span is not None:
-        body_start, body_end = body_span
-        for line in lines[body_start:body_end]:
-            entry = _extract_key_value(line)
-            if entry is not None:
-                key, value = entry
-                values[key.casefold()] = value
-    return frozendict(values)
-
-
 def parse_ini_patch(text: str, *, source_path: Path) -> IniPatch:
-    """Parse a Westwood `.patch.{ini,map,yrm,mpr,cfg,inj}` document.
+    """Parse a `.patch.{ini,map,yrm,mpr,cfg,inj}` patch document.
 
     Directives may appear either inside `[Section]` blocks or at the
     top-level root scope (for sectionless `.cfg` and `.inj` files):
@@ -474,8 +442,7 @@ def apply_ini_patch(
             case IniDeleteSection(section=section):
                 lines = _delete_ini_section(lines, section)
             case IniUpdateSection(section=section, operations=key_ops):
-                for op in key_ops:
-                    lines = _apply_ini_key_op(lines, section, op)
+                lines = _apply_ini_section_update(lines, section, key_ops)
 
     if not lines:
         return ""
@@ -687,113 +654,84 @@ def _delete_ini_section(lines: list[str], section: str) -> list[str]:
     return [*lines[:start], *lines[end:]]
 
 
-def _apply_ini_key_op(
+def _apply_ini_section_update(
     lines: list[str],
     section: str | None,
-    op: IniKeyOp,
+    key_ops: Sequence[IniKeyOp],
 ) -> list[str]:
     if section is None:
         body_start, body_end = _root_body_span(lines)
-        return _apply_key_op_to_span(lines, body_start, body_end, op)
+        updated_body = _apply_key_ops_to_body(lines[body_start:body_end], key_ops)
+        return [*lines[:body_start], *updated_body, *lines[body_end:]]
 
     body_span = _find_section_body_span(lines, section)
     if body_span is None:
-        match op:
-            case IniUnset():
-                return lines
-            case IniSet(key=key, value=value):
-                entry_line = f"{key}={value}"
-            case IniAppend(value=value):
-                entry_line = f"0={value}"
+        new_body = _apply_key_ops_to_body([], key_ops)
+        if not new_body:
+            return lines
         updated = list(lines)
         if updated and updated[-1].strip():
             updated.append("")
-        updated.extend((f"[{section}]", entry_line))
+        updated.append(f"[{section}]")
+        updated.extend(new_body)
         return updated
 
     body_start, body_end = body_span
-    return _apply_key_op_to_span(lines, body_start, body_end, op)
+    updated_body = _apply_key_ops_to_body(lines[body_start:body_end], key_ops)
+    return [*lines[:body_start], *updated_body, *lines[body_end:]]
 
 
-def _apply_key_op_to_span(
-    lines: list[str],
-    body_start: int,
-    body_end: int,
-    op: IniKeyOp,
+def _apply_key_ops_to_body(
+    body: list[str],
+    key_ops: Sequence[IniKeyOp],
 ) -> list[str]:
-    match op:
-        case IniUnset(key=key):
-            return _unset_key_in_body(lines, body_start, body_end, key)
-        case IniSet(key=key, value=value):
-            return _set_key_in_body(lines, body_start, body_end, key, value)
-        case IniAppend(value=value):
-            next_key = str(_next_numeric_key(lines, body_start, body_end))
-            return _insert_at_body_tail(
-                lines,
-                body_start,
-                body_end,
-                f"{next_key}={value}",
-            )
+    current = list(body)
+    for op in key_ops:
+        match op:
+            case IniUnset(key=key):
+                current = _unset_key_in_body(current, key)
+            case IniSet(key=key, value=value):
+                current = _set_key_in_body(current, key, value)
+            case IniAppend(value=value):
+                next_key = str(_next_numeric_key(current))
+                current = _insert_at_body_tail(current, f"{next_key}={value}")
+    return current
 
 
-def _unset_key_in_body(
-    lines: list[str],
-    body_start: int,
-    body_end: int,
-    key: str,
-) -> list[str]:
+def _unset_key_in_body(body: list[str], key: str) -> list[str]:
     target = key.casefold()
-    kept_body = [
-        line
-        for line in lines[body_start:body_end]
-        if (_extract_key_name(line) or "").casefold() != target
+    return [
+        line for line in body if (_extract_key_name(line) or "").casefold() != target
     ]
-    return [*lines[:body_start], *kept_body, *lines[body_end:]]
 
 
-def _set_key_in_body(
-    lines: list[str],
-    body_start: int,
-    body_end: int,
-    key: str,
-    value: str,
-) -> list[str]:
+def _set_key_in_body(body: list[str], key: str, value: str) -> list[str]:
     target = key.casefold()
-    updated = list(lines)
-    for idx in range(body_start, body_end):
-        raw_line = updated[idx]
+    updated = list(body)
+    for idx, raw_line in enumerate(updated):
         found_key = _extract_key_name(raw_line)
         if found_key is not None and found_key.casefold() == target:
             before_eq, sep, after_eq = raw_line.partition("=")
             leading_ws = after_eq[: len(after_eq) - len(after_eq.lstrip(" \t"))]
             updated[idx] = f"{before_eq}{sep}{leading_ws}{value}"
             return updated
-    return _insert_at_body_tail(updated, body_start, body_end, f"{key}={value}")
+    return _insert_at_body_tail(updated, f"{key}={value}")
 
 
-def _next_numeric_key(
-    lines: Sequence[str],
-    body_start: int,
-    body_end: int,
-) -> int:
+def _next_numeric_key(body: Sequence[str]) -> int:
     max_index = -1
-    for idx in range(body_start, body_end):
-        found_key = _extract_key_name(lines[idx])
+    for line in body:
+        found_key = _extract_key_name(line)
         if found_key is not None and found_key.isdigit():
             max_index = max(max_index, int(found_key))
     return max_index + 1
 
 
-def _insert_at_body_tail(
-    lines: list[str],
-    body_start: int,
-    body_end: int,
-    new_line: str,
-) -> list[str]:
-    insert_at = body_end
-    while insert_at > body_start and not lines[insert_at - 1].strip():
+def _insert_at_body_tail(body: list[str], new_line: str) -> list[str]:
+    insert_at = len(body)
+    while insert_at > 0 and not body[insert_at - 1].strip():
         insert_at -= 1
-    return [*lines[:insert_at], new_line, *lines[insert_at:]]
+    return [*body[:insert_at], new_line, *body[insert_at:]]
 
 
 def _replace_text(

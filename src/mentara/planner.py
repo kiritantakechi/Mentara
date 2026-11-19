@@ -1,12 +1,22 @@
-"""Pure layer planning, patch composition, and conflict inspection."""
+"""Pure layer planning, patch/MIX composition, and conflict checks."""
 
 from dataclasses import dataclass, field
 from enum import StrEnum
 from fnmatch import fnmatchcase
 from pathlib import Path
+from typing import Final
 lazy from collections.abc import Sequence
 
 from mentara.errors import OverlayError
+from mentara.mix import (
+    MIX_PATCH_SUFFIX,
+    MixArchiveSpec,
+    MixFileSpec,
+    MixPatchSpec,
+    compose_mix_archive,
+    open_mix_archive,
+    render_mix_member_text,
+)
 from mentara.patcher import (
     PatchSpec,
     apply_patch_chain,
@@ -22,8 +32,13 @@ __all__ = [
     "OverlayPlan",
     "build_overlay_plan",
     "matches_any_pattern",
+    "materialize_synthesized_entry",
     "render_entry_text",
+    "render_virtual_text",
+    "validate_synthesized_entry",
 ]
+
+_MIX_SUFFIX: Final[str] = ".mix"
 
 
 class EntryOrigin(StrEnum):
@@ -40,6 +55,7 @@ class Materialization(StrEnum):
     SYMLINK = "symlink"
     COPY = "copy"
     PATCH = "patch"
+    MIX = "mix"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +71,7 @@ class LayerSource:
 
 @dataclass(frozen=True, slots=True)
 class FileEntry:
-    """Winning or text-merged file resolved across stacked layers."""
+    """Winning or synthesized file resolved across stacked layers."""
 
     relative_path: Path
     source_path: Path | None
@@ -64,6 +80,9 @@ class FileEntry:
     materialization: Materialization
     shadowed_from: tuple[str, ...] = ()
     patches: tuple[PatchSpec, ...] = ()
+    mix_archives: tuple[MixArchiveSpec, ...] = ()
+    mix_files: tuple[MixFileSpec, ...] = ()
+    mix_patches: tuple[MixPatchSpec, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +102,7 @@ class OverlayPlan:
     case_collisions: tuple[CaseCollision, ...]
 
     def overrides(self) -> tuple[FileEntry, ...]:
-        """Return entries supplied or patched by layers or state.
+        """Return entries supplied or modified by layers or state.
 
         Returns:
             All entries whose origin is not `EntryOrigin.BASE`.
@@ -99,6 +118,18 @@ class OverlayPlan:
             All entries with non-empty `patches`.
         """
         return tuple(entry for entry in self.entries if entry.patches)
+
+    def synthesized_entries(self) -> tuple[FileEntry, ...]:
+        """Return entries requiring text patching or MIX composition.
+
+        Returns:
+            All entries with `Materialization.PATCH` or `MIX`.
+        """
+        return tuple(
+            entry
+            for entry in self.entries
+            if entry.materialization in {Materialization.PATCH, Materialization.MIX}
+        )
 
     def matching(self, patterns: Sequence[str]) -> tuple[FileEntry, ...]:
         """Filter entries matching any case-insensitive glob pattern.
@@ -155,8 +186,8 @@ def build_overlay_plan(
     """Compute the merged file map across ordered bottom-to-top sources.
 
     Later entries in `sources` override earlier entries at the same
-    relative path, while `.patch.ini` and `.patch.toml` files compose
-    incrementally on top of lower-layer files.
+    relative path, while `.patch.*` files and `<archive>.mix/` container
+    overlays compose incrementally on top of lower-layer files.
 
     Args:
         sources: Ordered layer sources from lowest to highest priority.
@@ -242,6 +273,102 @@ def render_entry_text(entry: FileEntry) -> str:
     return apply_patch_chain(base_text, entry.patches)
 
 
+def render_virtual_text(plan: OverlayPlan, target: Path) -> str:
+    """Render a virtual text file or an entry inside a virtual `.mix`.
+
+    Supports both regular virtual paths (e.g. `RA2MO.ini`) and inner MIX
+    member paths (e.g. `expandmo99.mix/rulesmo.ini`).
+
+    Args:
+        plan: Resolved `OverlayPlan`.
+        target: Relative virtual file path or `<archive>.mix/<member>`.
+
+    Returns:
+        Rendered UTF-8 text.
+
+    Raises:
+        OverlayError: If the target file or MIX entry does not exist.
+    """
+    mix_split = _split_mix_container_path(target)
+    if mix_split is not None:
+        mix_rel, inner_rel = mix_split
+        mix_entry = plan.lookup_case_insensitive(mix_rel)
+        if mix_entry is None:
+            raise OverlayError.missing_virtual_file(target)
+        return render_mix_member_text(
+            mix_entry.source_path,
+            mix_archives=mix_entry.mix_archives,
+            mix_files=mix_entry.mix_files,
+            mix_patches=mix_entry.mix_patches,
+            member_name=inner_rel.name,
+        )
+
+    entry = plan.lookup_case_insensitive(target)
+    if entry is None:
+        raise OverlayError.missing_virtual_file(target)
+    return render_entry_text(entry)
+
+
+def materialize_synthesized_entry(
+    entry: FileEntry,
+    target_path: Path,
+) -> None:
+    """Write a `PATCH` or `MIX` synthesized entry to `target_path`.
+
+    Args:
+        entry: Synthesized `FileEntry` from an `OverlayPlan`.
+        target_path: Destination file path on disk.
+    """
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    match entry.materialization:
+        case Materialization.PATCH:
+            rendered = render_entry_text(entry)
+            target_path.write_text(rendered, encoding="utf-8", newline="")
+        case Materialization.MIX:
+            compose_mix_archive(
+                target_path,
+                base_archive=entry.source_path,
+                mix_archives=entry.mix_archives,
+                mix_files=entry.mix_files,
+                mix_patches=entry.mix_patches,
+            )
+        case Materialization.COPY | Materialization.SYMLINK:
+            pass
+
+
+def validate_synthesized_entry(entry: FileEntry) -> None:
+    """Dry-run validation of a `PATCH` or `MIX` entry without writing.
+
+    Args:
+        entry: Synthesized `FileEntry` to validate.
+
+    Raises:
+        OverlayError: If any patch or MIX source is malformed.
+    """
+    match entry.materialization:
+        case Materialization.PATCH:
+            _ = render_entry_text(entry)
+        case Materialization.MIX:
+            if entry.source_path is not None:
+                _ = open_mix_archive(entry.source_path)
+            for arch_spec in entry.mix_archives:
+                _ = open_mix_archive(arch_spec.source_path)
+            seen_targets: set[str] = set()
+            for patch_spec in entry.mix_patches:
+                folded = patch_spec.target_name.casefold()
+                if folded not in seen_targets:
+                    seen_targets.add(folded)
+                    _ = render_mix_member_text(
+                        entry.source_path,
+                        mix_archives=entry.mix_archives,
+                        mix_files=entry.mix_files,
+                        mix_patches=entry.mix_patches,
+                        member_name=patch_spec.target_name,
+                    )
+        case Materialization.COPY | Materialization.SYMLINK:
+            pass
+
+
 def matches_any_pattern(
     relative_path: Path,
     patterns: Sequence[str],
@@ -267,6 +394,26 @@ def matches_any_pattern(
     return False
 
 
+def _split_mix_container_path(rel_path: Path) -> tuple[Path, Path] | None:
+    parts = rel_path.parts
+    for idx, segment in enumerate(parts[:-1]):
+        if segment.casefold().endswith(_MIX_SUFFIX) and len(segment) > len(_MIX_SUFFIX):
+            mix_rel = Path(*parts[: idx + 1])
+            inner_rel = Path(*parts[idx + 1 :])
+            return mix_rel, inner_rel
+    return None
+
+
+def _parse_mix_patch_archive(rel_path: Path) -> Path | None:
+    name = rel_path.name
+    if name.casefold().endswith(MIX_PATCH_SUFFIX) and len(name) > len(MIX_PATCH_SUFFIX):
+        stem = name[: -len(MIX_PATCH_SUFFIX)]
+        target_name = f"{stem}{_MIX_SUFFIX}"
+        parent = rel_path.parent
+        return Path(target_name) if parent == Path() else parent / target_name
+    return None
+
+
 def _scan_source(
     *,
     source: LayerSource,
@@ -278,12 +425,16 @@ def _scan_source(
         rel_dir = current_dir.relative_to(source.root)
         is_top_level = rel_dir == Path()
 
-        # Prune excluded directories in place before descending.
         dirnames[:] = sorted(
             name for name in dirnames if not (is_top_level and name in excluded)
         )
         for dirname in dirnames:
-            acc.directories.add(Path(dirname) if is_top_level else rel_dir / dirname)
+            candidate_dir = Path(dirname) if is_top_level else rel_dir / dirname
+            if source.origin is EntryOrigin.LAYER and _is_or_inside_mix_dir(
+                candidate_dir
+            ):
+                continue
+            acc.directories.add(candidate_dir)
 
         for filename in sorted(filenames):
             if is_top_level and filename in excluded:
@@ -296,30 +447,151 @@ def _scan_source(
             if not (full_path.is_file() or full_path.is_symlink()):
                 continue
 
-            patch_target = (
-                parse_patch_target(rel_file)
-                if source.origin is EntryOrigin.LAYER
-                else None
+            _dispatch_scanned_file(
+                rel_file=rel_file,
+                full_path=full_path,
+                source=source,
+                copy_patterns=copy_patterns,
+                acc=acc,
             )
-            if patch_target is not None:
-                target_rel, patch_kind = patch_target
-                _record_patch_entry(
-                    target_rel=target_rel,
-                    spec=PatchSpec(
-                        kind=patch_kind,
-                        source_path=full_path,
-                        layer_label=source.label,
-                    ),
-                    acc=acc,
-                )
-            else:
-                _record_full_entry(
-                    rel_file=rel_file,
-                    full_path=full_path,
-                    source=source,
-                    copy_patterns=copy_patterns,
-                    acc=acc,
-                )
+
+
+def _is_or_inside_mix_dir(rel_dir: Path) -> bool:
+    return any(
+        part.casefold().endswith(_MIX_SUFFIX) and len(part) > len(_MIX_SUFFIX)
+        for part in rel_dir.parts
+    )
+
+
+def _dispatch_scanned_file(
+    *,
+    rel_file: Path,
+    full_path: Path,
+    source: LayerSource,
+    copy_patterns: Sequence[str],
+    acc: _PlanAccumulator,
+) -> None:
+    if source.origin is EntryOrigin.LAYER:
+        mix_container = _split_mix_container_path(rel_file)
+        if mix_container is not None:
+            mix_rel, inner_rel = mix_container
+            _record_mix_container_member(
+                mix_rel=mix_rel,
+                inner_rel=inner_rel,
+                full_path=full_path,
+                layer_label=source.label,
+                acc=acc,
+            )
+            return
+
+        mix_patch_target = _parse_mix_patch_archive(rel_file)
+        if mix_patch_target is not None:
+            _record_mix_archive_patch(
+                mix_rel=mix_patch_target,
+                spec=MixArchiveSpec(
+                    source_path=full_path,
+                    layer_label=source.label,
+                ),
+                acc=acc,
+            )
+            return
+
+        patch_target = parse_patch_target(rel_file)
+        if patch_target is not None:
+            target_rel, patch_kind = patch_target
+            _record_patch_entry(
+                target_rel=target_rel,
+                spec=PatchSpec(
+                    kind=patch_kind,
+                    source_path=full_path,
+                    layer_label=source.label,
+                ),
+                acc=acc,
+            )
+            return
+
+    _record_full_entry(
+        rel_file=rel_file,
+        full_path=full_path,
+        source=source,
+        copy_patterns=copy_patterns,
+        acc=acc,
+    )
+
+
+def _record_mix_container_member(
+    *,
+    mix_rel: Path,
+    inner_rel: Path,
+    full_path: Path,
+    layer_label: str,
+    acc: _PlanAccumulator,
+) -> None:
+    previous = acc.winning.get(mix_rel)
+    shadowed = _append_shadow(previous, new_label=layer_label)
+    mix_archives = previous.mix_archives if previous is not None else ()
+    mix_files = previous.mix_files if previous is not None else ()
+    mix_patches = previous.mix_patches if previous is not None else ()
+
+    inner_patch = parse_patch_target(inner_rel)
+    if inner_patch is not None:
+        inner_target, patch_kind = inner_patch
+        mix_patches = (
+            *mix_patches,
+            MixPatchSpec(
+                target_name=inner_target.name,
+                patch=PatchSpec(
+                    kind=patch_kind,
+                    source_path=full_path,
+                    layer_label=layer_label,
+                ),
+            ),
+        )
+    else:
+        mix_files = (
+            *mix_files,
+            MixFileSpec(
+                target_name=inner_rel.name,
+                source_path=full_path,
+                layer_label=layer_label,
+            ),
+        )
+
+    acc.winning[mix_rel] = FileEntry(
+        relative_path=mix_rel,
+        source_path=previous.source_path if previous is not None else None,
+        origin=EntryOrigin.LAYER,
+        layer_label=layer_label,
+        materialization=Materialization.MIX,
+        shadowed_from=shadowed,
+        mix_archives=mix_archives,
+        mix_files=mix_files,
+        mix_patches=mix_patches,
+    )
+    acc.record_variant(mix_rel, layer_label)
+
+
+def _record_mix_archive_patch(
+    *,
+    mix_rel: Path,
+    spec: MixArchiveSpec,
+    acc: _PlanAccumulator,
+) -> None:
+    previous = acc.winning.get(mix_rel)
+    shadowed = _append_shadow(previous, new_label=spec.layer_label)
+    mix_archives = (*previous.mix_archives, spec) if previous is not None else (spec,)
+    acc.winning[mix_rel] = FileEntry(
+        relative_path=mix_rel,
+        source_path=previous.source_path if previous is not None else None,
+        origin=EntryOrigin.LAYER,
+        layer_label=spec.layer_label,
+        materialization=Materialization.MIX,
+        shadowed_from=shadowed,
+        mix_archives=mix_archives,
+        mix_files=previous.mix_files if previous is not None else (),
+        mix_patches=previous.mix_patches if previous is not None else (),
+    )
+    acc.record_variant(mix_rel, spec.layer_label)
 
 
 def _record_patch_entry(

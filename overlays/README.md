@@ -8,14 +8,43 @@ the original Mental Omega game directory.
 - `overlays/phobos/`: Upstream **Phobos `v0.5-alpha2`** (`Phobos.dll`,
   bundled `Syringe.exe` / SyringeEx `0.1.0.2`, `gamemd.edb`,
   `Syringe.LICENSE.txt`, and `Phobos.pdb` which is excluded from Git via
-  `*.pdb` in `.gitignore`), plus the text-level patch
-  `Resources/ClientDefinitions.patch.ini` which modifies only the 3
-  `[Settings]` keys needed for SyringeEx's `--args="..."` launch syntax.
+  `*.pdb` in `.gitignore`), plus declarative `.patch.ini` files (including
+  virtual MIX container patches under `expandmo99.mix/`) that modernize
+  Mental Omega's UX, visuals, HUD, controls, and client launch:
+  - `RA2MO.patch.ini`: Enables `[Phobos]` extended tooltip descriptions &
+    blur, smart harvester selection/deployment filtering, IFV mode type-select,
+    building placement preview, designator/enhancer range rings, floating
+    digital displays, power delta & harvester counters, elapsed game clock,
+    centered subtitle board, adaptive real-time timers, and automatic
+    campaign mission start checkpoint saves.
+  - `expandmo99.mix/uimd.patch.ini`: Patches `uimd.ini` directly inside
+    `expandmo99.mix` (automatically decrypting/sanitizing the S4-protected
+    base `expandmo99.mix` and mixing the patched entry back into the virtual
+    `expandmo99.mix`) to enable fast smooth credit rolling (`MaxStep=500`),
+    sidebar harvester & power delta counters, centered pause menu background
+    on widescreen displays, and anchored 360px extended tooltips.
+  - `expandmo99.mix/rulesmo.patch.ini`: Patches `rulesmo.ini` directly inside
+    `expandmo99.mix` (avoiding loose root `rulesmo.ini` files and keeping
+    `ClientDefinitions.ini` `ForbiddenFiles` intact) to enable building
+    production queues, auto-tab switching when selecting factories, fast
+    transport/bunker boarding & unloading, translucent building placement
+    previews, floating `$` harvester/grinder income & drain numbers, dynamic
+    turret & altitude-scaled aircraft shadows, fixed voxel lighting & RLE
+    transparency blitters, water wakes for all locomotors, off-screen combat
+    voice alerts, hover HP & factory progress digital displays,
+    faction-specific in-game win/lose themes, and `LowSelectionPriority=true`
+    on all 10 Mental Omega harvester types.
+  - `Resources/ClientDefinitions.patch.ini`: Migrates `MentalOmegaClient.exe`
+    to SyringeEx `--args="..."` launch syntax.
+  - `Resources/KeyboardCommands.patch.ini`: Exposes Phobos hotkeys (Idle
+    Harvester, Select Captured, Deselect 1/5, Toggle Digital Display, Toggle
+    Designator Range, Toggle Center Message Board, Quicksave, Damage Numbers)
+    in the client's graphical Hotkey configuration window.
+  - `Resources/OptionsWindow.patch.ini`: Hides the legacy 2021 `savefixmo.dll`
+    checkbox which is natively superseded by Phobos `v0.5-alpha2`.
   - Source: https://github.com/Phobos-developers/Phobos/releases/tag/v0.5-alpha2
-  - Stacked *below* `overlays/base` so local overrides in `overlays/base`
-    always take precedence.
-- `overlays/base/`: Your local custom INI / DLL overrides and
-  `<stem>.patch.{ini,map,yrm,mpr,cfg,inj}` / `<target>.patch.toml` patches.
+- `overlays/base/`: Your local custom overrides, `<stem>.patch.*` text patches,
+  and `<archive>.mix/` container overlays (stacked above `overlays/phobos`).
 
 ## Text-Level Patching
 

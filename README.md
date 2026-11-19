@@ -5,10 +5,11 @@
 Mentara 在启动游戏时自动维护一个与原版游戏目录解耦的虚拟工作目录，将只读的原游戏目录、多个有序自定义叠层（INI、DLL、资源包等）与独立的可写状态层合成为统一视图：
 
 - **原文件零污染**：游戏本体目录与自定义叠层目录均保持只读干净状态。
-- **文件级 + 文本条目级正交叠层**：
-  - 整文件覆盖（`.dll`、`.mix`、`.ini`）与文本级补丁职责完全正交，可跨多层按序组合。
-  - **`<stem>.patch.{ini,map,yrm,mpr,cfg,inj}`（Westwood INI / 地图 / 键值级）**：直接由后缀确定目标格式（如 `ClientDefinitions.patch.ini` -> `ClientDefinitions.ini`、`c_aberration.patch.map` -> `c_aberration.map`、`aqrit.patch.cfg` -> `aqrit.cfg`、`Ares.dll.patch.inj` -> `Ares.dll.inj`）；支持分节与无节顶层 `Key=Value` 原地修改/新增（保留等号对齐）、`!Key` 删除键、`[-Section]` 删除整节、`+=Value` 自动按当前节最大数字键 `+1` 追加，完整保留注释与 CRLF 换行。
+- **文件级 + 文本条目级 + MIX 容器级正交叠层**：
+  - 整文件覆盖（`.dll`、`.mix`、`.ini`）、文本级补丁与 MIX 容器级解密合成职责完全正交，可跨多层按序组合。
+  - **`<stem>.patch.{ini,map,yrm,mpr,cfg,inj}`（INI / 地图 / 键值级）**：直接由后缀确定目标格式（如 `ClientDefinitions.patch.ini` -> `ClientDefinitions.ini`、`c_aberration.patch.map` -> `c_aberration.map`、`aqrit.patch.cfg` -> `aqrit.cfg`、`Ares.dll.patch.inj` -> `Ares.dll.inj`）；支持分节与无节顶层 `Key=Value` 原地修改/新增（保留等号对齐）、`!Key` 删除键、`[-Section]` 删除整节、`+=Value` 自动按当前节最大数字键 `+1` 追加，完整保留注释与 CRLF 换行。
   - **`<target>.patch.toml`（通用明文行/块级）**：`[[text]]` 对称操作集（`replace`、`insert_before` / `insert_after`、`prepend` / `append`、`delete_lines`），适用于 `.config`、`.xml`、`.edb`、`.txt` 等任意明文。
+  - **`<archive>.mix/` 与 `<stem>.patch.mix`（MIX 容器级解密与混合）**：内置多级 MIX 解密与净化引擎（支持 S1 标准包、S2b CryptoRuntime RC4+MT19937 流加密包、S3 Westwood RSA-320 + Blowfish-ECB 加密包、S4 防解包 `0xFFFFFFFF` 哨兵/伪造尺寸/加权区间调度 DP 重叠诱饵剔除与孤立 XCC 文件名表雕刻、S5 坏计数索引恢复）。在叠层中创建 `<archive>.mix/` 目录（例如 `overlays/phobos/expandmo99.mix/rulesmo.patch.ini` 与 `uimd.patch.ini`）或放置 `<stem>.patch.mix`，即可直接对 `.mix` 包内任意条目打文本补丁或注入替换文件，并在虚拟工作区自动合成为标准未加密 `.mix` 归档，无需解包污染根目录。
 - **Linux 与 Windows 对称设计**：
   - `[linux]` 与 `[windows]` 采用完全一致的 `PlatformConfig` 结构（`backend`、`runtime_dir`、`state_dir`、`runner`），同一份 `mentara.toml` 与 Profile 可在双平台直接运行。
   - **Linux**：默认使用 `fuse-overlayfs` 零复制联合挂载，通过 `gamescope ... -- umu-run` 链式启动，挂载点与状态层分别位于 `$XDG_CACHE_HOME/mentara/runtime` 与 `$XDG_STATE_HOME/mentara`。

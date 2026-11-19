@@ -15,7 +15,6 @@ from mentara.patcher import (
     parse_ini_patch,
     parse_patch_target,
     parse_toml_patch,
-    read_ini_section,
 )
 
 
@@ -66,13 +65,6 @@ def test_sectionless_cfg_and_inj_patches_preserve_alignment() -> None:
     assert "NoVideoMemory" not in merged_cfg
     assert "ShowFPS                  = 1\r\n" in merged_cfg
     assert "CustomOption=2\r\n" in merged_cfg
-    assert read_ini_section(merged_cfg) == frozendict(
-        {
-            "forcedirectdrawemulation": "1",
-            "showfps": "1",
-            "customoption": "2",
-        }
-    )
 
     base_inj = (
         "; \\Ares.cpp\r\n"

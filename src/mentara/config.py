@@ -31,14 +31,13 @@ __all__ = [
     "ResolvedProfile",
     "ResolvedRunner",
     "RunnerConfig",
-    "RunnerOverrideConfig",
     "find_config_path",
     "load_config",
     "resolve_profile",
 ]
 
 DEFAULT_CONFIG_FILENAME = "mentara.toml"
-DEFAULT_EXCLUDE: tuple[str, ...] = ("Mentara", ".git", ".gitkeep")
+DEFAULT_EXCLUDE: tuple[str, ...] = (".git", ".gitkeep")
 DEFAULT_COPY_PATTERNS: tuple[str, ...] = (
     "*.ini",
     "*.cfg",
@@ -72,25 +71,7 @@ class BackendKind(StrEnum):
 
 
 class RunnerConfig(BaseModel):
-    """Base launcher runtime command and environment settings."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    command: tuple[str, ...] = ()
-    executable: str = "MentalOmegaClient.exe"
-    args: tuple[str, ...] = ()
-    env: dict[str, str] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _validate_executable(self) -> Self:
-        if not self.executable.strip():
-            msg = "runner.executable must not be empty"
-            raise ValueError(msg)
-        return self
-
-
-class RunnerOverrideConfig(BaseModel):
-    """Partial overrides applied on top of a base `RunnerConfig`."""
+    """Declarative runner command, executable, arguments, and env."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -102,7 +83,7 @@ class RunnerOverrideConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_executable(self) -> Self:
         if self.executable is not None and not self.executable.strip():
-            msg = "runner.executable override must not be empty"
+            msg = "runner.executable must not be empty"
             raise ValueError(msg)
         return self
 
@@ -115,7 +96,7 @@ class PlatformConfig(BaseModel):
     backend: BackendKind | None = None
     runtime_dir: str | None = None
     state_dir: str | None = None
-    runner: RunnerOverrideConfig | None = None
+    runner: RunnerConfig | None = None
 
 
 class ProfileConfig(BaseModel):
@@ -130,7 +111,7 @@ class ProfileConfig(BaseModel):
     state_dir: str | None = None
     persist_state: bool = True
     copy_patterns: tuple[str, ...] | None = None
-    runner: RunnerOverrideConfig | None = None
+    runner: RunnerConfig | None = None
     linux: PlatformConfig | None = None
     windows: PlatformConfig | None = None
 
@@ -162,7 +143,7 @@ class MentaraConfig(BaseModel):
     backend: BackendKind | None = None
     exclude: tuple[str, ...] = DEFAULT_EXCLUDE
     copy_patterns: tuple[str, ...] = DEFAULT_COPY_PATTERNS
-    runner: RunnerOverrideConfig | None = None
+    runner: RunnerConfig | None = None
     linux: PlatformConfig = Field(default_factory=PlatformConfig)
     windows: PlatformConfig = Field(default_factory=PlatformConfig)
     profiles: dict[str, ProfileConfig] = Field(
@@ -394,7 +375,6 @@ def resolve_profile(
     )
 
     runner = _merge_runner_chain(
-        base=_default_runner_for(active_platform),
         overrides=(
             config.runner,
             global_plat.runner,
@@ -417,6 +397,11 @@ def resolve_profile(
         if profile.copy_patterns is not None
         else config.copy_patterns
     )
+    exclude = _resolve_exclude(
+        config.exclude,
+        config_dir=resolved_config_dir,
+        base_dir=base_dir,
+    )
 
     return ResolvedProfile(
         name=chosen_name,
@@ -429,7 +414,7 @@ def resolve_profile(
         persist_state=profile.persist_state,
         runtime_dir=runtime_dir,
         state_dir=state_dir,
-        exclude=config.exclude,
+        exclude=exclude,
         copy_patterns=copy_patterns,
         runner=runner,
     )
@@ -443,18 +428,17 @@ def _default_backend_for(platform: PlatformKind) -> BackendKind:
             return BackendKind.SYMLINK
 
 
-def _default_runner_for(platform: PlatformKind) -> RunnerConfig:
-    match platform:
-        case PlatformKind.LINUX:
-            return RunnerConfig(
-                command=("umu-run",),
-                executable="MentalOmegaClient.exe",
-            )
-        case PlatformKind.WINDOWS:
-            return RunnerConfig(
-                command=(),
-                executable="MentalOmegaClient.exe",
-            )
+def _resolve_exclude(
+    configured: tuple[str, ...],
+    *,
+    config_dir: Path,
+    base_dir: Path,
+) -> tuple[str, ...]:
+    if config_dir != base_dir and config_dir.is_relative_to(base_dir):
+        self_segment = config_dir.relative_to(base_dir).parts[0]
+        if self_segment not in configured:
+            return (*configured, self_segment)
+    return configured
 
 
 def _first_non_empty(candidates: Sequence[str | None]) -> str | None:
@@ -564,15 +548,14 @@ def _paths_overlap(first: Path, second: Path) -> bool:
 
 def _merge_runner_chain(
     *,
-    base: RunnerConfig,
-    overrides: Sequence[RunnerOverrideConfig | None],
+    overrides: Sequence[RunnerConfig | None],
     executable_override: str | None,
     extra_args: Sequence[str],
 ) -> ResolvedRunner:
-    command = base.command
-    executable = base.executable
-    args = base.args
-    merged_env = dict(base.env)
+    command: tuple[str, ...] = ()
+    executable = ""
+    args: tuple[str, ...] = ()
+    merged_env: dict[str, str] = {}
 
     for override in overrides:
         if override is None:
