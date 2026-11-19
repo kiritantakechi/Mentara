@@ -2,10 +2,10 @@
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Self
+from typing import Final, Self, assert_never
 lazy from collections.abc import Sequence
 
 from pydantic import (
@@ -19,15 +19,18 @@ from pydantic import (
 from mentara.errors import ConfigError
 
 __all__ = [
-    "DEFAULT_CONFIG_FILENAME",
-    "DEFAULT_COPY_PATTERNS",
-    "DEFAULT_EXCLUDE",
+    "CONFIG_FILENAME_DEFAULT",
+    "COPY_PATTERNS_DEFAULT",
+    "EXCLUDE_DEFAULT",
     "BackendKind",
+    "MIXConfig",
+    "MIXDecryptMode",
     "MentaraConfig",
     "PlatformConfig",
     "PlatformKind",
     "ProfileConfig",
     "ProfileOverrides",
+    "ResolvedMIX",
     "ResolvedProfile",
     "ResolvedRunner",
     "RunnerConfig",
@@ -36,15 +39,16 @@ __all__ = [
     "resolve_profile",
 ]
 
-DEFAULT_CONFIG_FILENAME = "mentara.toml"
-DEFAULT_EXCLUDE: tuple[str, ...] = (".git", ".gitkeep")
-DEFAULT_COPY_PATTERNS: tuple[str, ...] = (
+CONFIG_FILENAME_DEFAULT: Final[str] = "mentara.toml"
+EXCLUDE_DEFAULT: Final[tuple[str, ...]] = (".git", ".gitkeep")
+COPY_PATTERNS_DEFAULT: Final[tuple[str, ...]] = (
     "*.ini",
     "*.cfg",
     "*.log",
     "*.sav",
     "*.key",
 )
+_MVMX_SECRET_HEX_LENGTH: Final[int] = 64
 
 
 class PlatformKind(StrEnum):
@@ -62,12 +66,48 @@ class PlatformKind(StrEnum):
         """
         return cls.WINDOWS if os.name.startswith("nt") else cls.LINUX
 
+    @property
+    def is_posix(self) -> bool:
+        """Return whether this platform uses POSIX process semantics."""
+        return self is PlatformKind.LINUX
+
 
 class BackendKind(StrEnum):
     """Supported virtual workspace materialisation backends."""
 
     FUSE_OVERLAYFS = "fuse-overlayfs"
     SYMLINK = "symlink"
+
+
+class MIXDecryptMode(StrEnum):
+    """Policy controlling automatic MIX archive decryption."""
+
+    LAYERS = "layers"
+    ALL = "all"
+    PATCHED = "patched"
+
+
+class MIXConfig(BaseModel):
+    """Declarative MIX archive decryption and key configuration."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    decrypt: MIXDecryptMode | None = None
+    mvmx_secret: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_secret(self) -> Self:
+        if self.mvmx_secret is not None:
+            cleaned = self.mvmx_secret.strip()
+            if len(cleaned) != _MVMX_SECRET_HEX_LENGTH:
+                msg = "mix.mvmx_secret must be exactly 64 hex characters"
+                raise ValueError(msg)
+            try:
+                _ = bytes.fromhex(cleaned)
+            except ValueError as exc:
+                msg = "mix.mvmx_secret must be valid hexadecimal"
+                raise ValueError(msg) from exc
+        return self
 
 
 class RunnerConfig(BaseModel):
@@ -111,6 +151,7 @@ class ProfileConfig(BaseModel):
     state_dir: str | None = None
     persist_state: bool = True
     copy_patterns: tuple[str, ...] | None = None
+    mix: MIXConfig | None = None
     runner: RunnerConfig | None = None
     linux: PlatformConfig | None = None
     windows: PlatformConfig | None = None
@@ -129,6 +170,8 @@ class ProfileConfig(BaseModel):
                 return self.linux
             case PlatformKind.WINDOWS:
                 return self.windows
+            case _:
+                assert_never(platform)
 
 
 class MentaraConfig(BaseModel):
@@ -141,8 +184,9 @@ class MentaraConfig(BaseModel):
     state_dir: str | None = None
     default_profile: str = "default"
     backend: BackendKind | None = None
-    exclude: tuple[str, ...] = DEFAULT_EXCLUDE
-    copy_patterns: tuple[str, ...] = DEFAULT_COPY_PATTERNS
+    exclude: tuple[str, ...] = EXCLUDE_DEFAULT
+    copy_patterns: tuple[str, ...] = COPY_PATTERNS_DEFAULT
+    mix: MIXConfig | None = None
     runner: RunnerConfig | None = None
     linux: PlatformConfig = Field(default_factory=PlatformConfig)
     windows: PlatformConfig = Field(default_factory=PlatformConfig)
@@ -164,6 +208,8 @@ class MentaraConfig(BaseModel):
                 return self.linux
             case PlatformKind.WINDOWS:
                 return self.windows
+            case _:
+                assert_never(platform)
 
     @model_validator(mode="after")
     def _validate_profiles(self) -> Self:
@@ -188,6 +234,14 @@ class ProfileOverrides:
     backend: BackendKind | None = None
     executable: str | None = None
     extra_args: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedMIX:
+    """Fully resolved, immutable MIX decryption policy and key."""
+
+    decrypt: MIXDecryptMode = MIXDecryptMode.LAYERS
+    mvmx_secret: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +271,7 @@ class ResolvedProfile:
     exclude: tuple[str, ...]
     copy_patterns: tuple[str, ...]
     runner: ResolvedRunner
+    mix: ResolvedMIX = field(default_factory=ResolvedMIX)
 
     @property
     def merged_dir(self) -> Path:
@@ -254,10 +309,10 @@ def find_config_path(
 
     start = (cwd or Path.cwd()).resolve()
     for directory in (start, *start.parents):
-        candidate = directory / DEFAULT_CONFIG_FILENAME
+        candidate = directory / CONFIG_FILENAME_DEFAULT
         if candidate.is_file():
             return candidate
-    raise ConfigError.missing_file(start / DEFAULT_CONFIG_FILENAME)
+    raise ConfigError.missing_file(start / CONFIG_FILENAME_DEFAULT)
 
 
 def load_config(path: Path) -> MentaraConfig:
@@ -397,6 +452,7 @@ def resolve_profile(
         if profile.copy_patterns is not None
         else config.copy_patterns
     )
+    mix = _merge_mix_chain(overrides=(config.mix, profile.mix))
     exclude = _resolve_exclude(
         config.exclude,
         config_dir=resolved_config_dir,
@@ -417,6 +473,7 @@ def resolve_profile(
         exclude=exclude,
         copy_patterns=copy_patterns,
         runner=runner,
+        mix=mix,
     )
 
 
@@ -426,6 +483,8 @@ def _default_backend_for(platform: PlatformKind) -> BackendKind:
             return BackendKind.FUSE_OVERLAYFS
         case PlatformKind.WINDOWS:
             return BackendKind.SYMLINK
+        case _:
+            assert_never(platform)
 
 
 def _resolve_exclude(
@@ -497,6 +556,8 @@ def _default_runtime_root(platform: PlatformKind) -> Path:
         case PlatformKind.LINUX:
             base = _env_path("XDG_CACHE_HOME") or (Path.home() / ".cache")
             return (base / "mentara" / "runtime").resolve()
+        case _:
+            assert_never(platform)
 
 
 def _default_state_root(platform: PlatformKind) -> Path:
@@ -506,6 +567,8 @@ def _default_state_root(platform: PlatformKind) -> Path:
         case PlatformKind.LINUX:
             base = _env_path("XDG_STATE_HOME") or (Path.home() / ".local" / "state")
             return (base / "mentara").resolve()
+        case _:
+            assert_never(platform)
 
 
 def _ensure_disjoint_workspace(
@@ -515,7 +578,7 @@ def _ensure_disjoint_workspace(
     base_dir: Path,
     layers: Sequence[Path],
 ) -> None:
-    if _paths_overlap(runtime_dir, state_dir):
+    if _do_paths_overlap(runtime_dir, state_dir):
         runtime_role = "runtime_dir"
         state_role = "state_dir"
         raise ConfigError.overlapping_paths(
@@ -533,7 +596,7 @@ def _ensure_disjoint_workspace(
         ("state_dir", state_dir),
     ):
         for source_role, source_path in sources:
-            if _paths_overlap(workspace_path, source_path):
+            if _do_paths_overlap(workspace_path, source_path):
                 raise ConfigError.overlapping_paths(
                     role,
                     workspace_path,
@@ -542,7 +605,7 @@ def _ensure_disjoint_workspace(
                 )
 
 
-def _paths_overlap(first: Path, second: Path) -> bool:
+def _do_paths_overlap(first: Path, second: Path) -> bool:
     return first.is_relative_to(second) or second.is_relative_to(first)
 
 
@@ -577,3 +640,19 @@ def _merge_runner_chain(
         args=(*args, *extra_args),
         env=frozendict(merged_env),
     )
+
+
+def _merge_mix_chain(
+    *,
+    overrides: Sequence[MIXConfig | None],
+) -> ResolvedMIX:
+    decrypt = MIXDecryptMode.LAYERS
+    mvmx_secret: str | None = None
+    for override in overrides:
+        if override is None:
+            continue
+        if override.decrypt is not None:
+            decrypt = override.decrypt
+        if override.mvmx_secret is not None:
+            mvmx_secret = override.mvmx_secret.strip()
+    return ResolvedMIX(decrypt=decrypt, mvmx_secret=mvmx_secret)

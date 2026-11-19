@@ -6,7 +6,7 @@ import logging
 import shlex
 import sys
 from pathlib import Path
-from typing import TextIO
+from typing import Final, TextIO, assert_never
 lazy from collections.abc import Sequence
 
 from mentara.config import (
@@ -21,6 +21,7 @@ from mentara.config import (
 )
 from mentara.doctor import run_doctor
 from mentara.errors import MentaraError
+from mentara.mix import MIXArchiveOp, MIXFileOp, MIXOp, MIXPatchOp
 from mentara.overlay import (
     MountedWorkspace,
     activate_workspace,
@@ -37,9 +38,9 @@ from mentara.runner import build_launch_spec, execute_launch
 
 __all__ = ["build_parser", "main"]
 
-_EXIT_OK = 0
-_EXIT_ERROR = 1
-_EXIT_INTERRUPTED = 130
+_EXIT_OK: Final[int] = 0
+_EXIT_ERROR: Final[int] = 1
+_EXIT_INTERRUPTED: Final[int] = 130
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -339,10 +340,10 @@ def _cmd_profiles(
         raw_profile = config.profiles[name]
         marker = "*" if name == config.default_profile else " "
         layers = ", ".join(raw_profile.layers) if raw_profile.layers else "(vanilla)"
-        desc = f" — {resolved.description}" if resolved.description else ""
+        description = f" — {resolved.description}" if resolved.description else ""
         lines.append(
             f"{marker} {name} [{resolved.platform.value}:{resolved.backend.value}] "
-            f"exe={resolved.runner.executable} layers=[{layers}]{desc}\n"
+            f"exe={resolved.runner.executable} layers=[{layers}]{description}\n"
         )
     stdout.write("".join(lines))
     return _EXIT_OK
@@ -476,23 +477,10 @@ def _cmd_inspect(
                         }
                         for spec in entry.patches
                     ],
-                    "mix_patches": [
-                        {
-                            "target": spec.target_name,
-                            "kind": spec.patch.kind.value,
-                            "layer": spec.patch.layer_label,
-                            "source": spec.patch.source_path.name,
-                        }
-                        for spec in entry.mix_patches
-                    ],
-                    "mix_files": [
-                        {
-                            "target": spec.target_name,
-                            "layer": spec.layer_label,
-                            "source": spec.source_path.name,
-                        }
-                        for spec in entry.mix_files
-                    ],
+                    "mix_decrypt": (
+                        entry.mix_probe.value if entry.mix_probe is not None else None
+                    ),
+                    "mix_ops": [_mix_op_to_dict(op) for op in entry.mix_ops],
                 }
                 for entry in selected
             ],
@@ -557,6 +545,49 @@ def _cmd_doctor(
     return _EXIT_OK
 
 
+def _mix_op_to_dict(op: MIXOp) -> dict[str, str]:
+    target = "/".join(op.target_path)
+    match op:
+        case MIXArchiveOp():
+            return {
+                "kind": "archive",
+                "target": target,
+                "layer": op.layer_label,
+                "source": op.source_path.name,
+            }
+        case MIXFileOp():
+            return {
+                "kind": "file",
+                "target": target,
+                "layer": op.layer_label,
+                "source": op.source_path.name,
+            }
+        case MIXPatchOp():
+            return {
+                "kind": f"patch:{op.patch.kind.value}",
+                "target": target,
+                "layer": op.patch.layer_label,
+                "source": op.patch.source_path.name,
+            }
+        case _:
+            assert_never(op)
+
+
+def _format_mix_op(op: MIXOp) -> str:
+    target = "/".join(op.target_path)
+    match op:
+        case MIXArchiveOp():
+            if target:
+                return f"{op.layer_label}:{target}<-{op.source_path.name}"
+            return f"{op.layer_label}:{op.source_path.name}"
+        case MIXFileOp():
+            return f"{op.layer_label}:{target}"
+        case MIXPatchOp():
+            return f"{op.patch.layer_label}:{target}<-{op.patch.source_path.name}"
+        case _:
+            assert_never(op)
+
+
 def _format_patch_note(entry: FileEntry) -> str:
     notes: list[str] = []
     if entry.patches:
@@ -564,20 +595,9 @@ def _format_patch_note(entry: FileEntry) -> str:
             f"{spec.layer_label}:{spec.source_path.name}" for spec in entry.patches
         )
         notes.append(f" [patches: {items}]")
-    if entry.mix_patches:
-        items = ", ".join(
-            f"{spec.patch.layer_label}:{spec.target_name}<-{spec.patch.source_path.name}"
-            for spec in entry.mix_patches
-        )
-        notes.append(f" [mix_patches: {items}]")
-    if entry.mix_files:
-        items = ", ".join(
-            f"{spec.layer_label}:{spec.target_name}" for spec in entry.mix_files
-        )
-        notes.append(f" [mix_files: {items}]")
-    if entry.mix_archives:
-        items = ", ".join(
-            f"{spec.layer_label}:{spec.source_path.name}" for spec in entry.mix_archives
-        )
-        notes.append(f" [mix_archives: {items}]")
+    if entry.mix_probe is not None:
+        notes.append(f" [decrypt:{entry.mix_probe.value}]")
+    if entry.mix_ops:
+        items = ", ".join(_format_mix_op(op) for op in entry.mix_ops)
+        notes.append(f" [mix: {items}]")
     return "".join(notes)

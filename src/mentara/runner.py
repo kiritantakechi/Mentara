@@ -10,9 +10,11 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
+from typing import Final
 lazy from collections.abc import Callable, Generator, Mapping, Sequence
 lazy from types import FrameType
 
+from mentara.config import PlatformKind
 from mentara.errors import RunnerError
 lazy from mentara.config import ResolvedProfile
 lazy from mentara.overlay import MountedWorkspace
@@ -26,9 +28,8 @@ __all__ = [
     "resolve_command_binary",
 ]
 
-_LOGGER = logging.getLogger(__name__)
-_TERMINATE_TIMEOUT_SECONDS = 5.0
-_IS_POSIX = not os.name.startswith("nt")
+_LOGGER: Final = logging.getLogger(__name__)
+_TERMINATE_TIMEOUT_SECONDS: Final[float] = 5.0
 
 type _SignalHandler = Callable[[int, FrameType | None], object] | int | None
 
@@ -168,13 +169,14 @@ def execute_launch(spec: LaunchSpec) -> LaunchResult:
             raise RunnerError.missing_runner(program)
     _LOGGER.info("Launching %s in %s", spec.argv, spec.cwd)
 
+    is_posix = PlatformKind.current().is_posix
     try:
         # User-configured command vector run directly without a shell.
-        process = subprocess.Popen(  # noqa: S603
+        process = subprocess.Popen(  # noqa: S603 - argv assembled from validated config
             spec.argv,
             cwd=spec.cwd,
             env=dict(spec.env),
-            start_new_session=_IS_POSIX,
+            start_new_session=is_posix,
         )
     except OSError as exc:
         raise RunnerError.spawn_failed(spec.argv, str(exc)) from exc
@@ -219,8 +221,9 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
     _LOGGER.warning("Interrupted; terminating child process %s", process.pid)
+    is_posix = PlatformKind.current().is_posix
     killpg = getattr(os, "killpg", None)
-    if _IS_POSIX and callable(killpg):
+    if is_posix and callable(killpg):
         with suppress(ProcessLookupError, OSError):
             killpg(process.pid, signal.SIGTERM)
     else:
@@ -232,7 +235,7 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     except subprocess.TimeoutExpired:
         _LOGGER.warning("Child process %s did not exit; killing", process.pid)
         sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
-        if _IS_POSIX and callable(killpg):
+        if is_posix and callable(killpg):
             with suppress(ProcessLookupError, OSError):
                 killpg(process.pid, sigkill)
         else:

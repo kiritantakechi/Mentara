@@ -1,5 +1,6 @@
 """Tests for symlink/hardlink staging and fuse-overlayfs backends."""
 
+import struct
 import subprocess
 from pathlib import Path
 
@@ -14,10 +15,19 @@ from mentara.config import (
     resolve_profile,
 )
 from mentara.errors import MountError, OverlayError
+from mentara.mix import (
+    LMD_ID,
+    build_lmd_blob,
+    mix_id,
+    open_mix_archive,
+    read_mix_entry_bytes,
+    signed_id,
+)
 from mentara.overlay import (
-    FuseOverlayBackend,
+    FUSEOverlayBackend,
     SymlinkStagingBackend,
     activate_workspace,
+    clean_state,
 )
 
 
@@ -211,7 +221,7 @@ def test_fuse_backend_rejects_windows_platform(tmp_path: Path) -> None:
         backend=BackendKind.FUSE_OVERLAYFS,
         platform=PlatformKind.WINDOWS,
     )
-    backend = FuseOverlayBackend()
+    backend = FUSEOverlayBackend()
 
     with pytest.raises(MountError, match="not supported on platform 'windows'"):
         backend.mount(profile)
@@ -222,7 +232,7 @@ def test_fuse_backend_builds_reversed_lowerdir_and_unmounts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profile = _make_profile(tmp_path, backend=BackendKind.FUSE_OVERLAYFS)
-    backend = FuseOverlayBackend()
+    backend = FUSEOverlayBackend()
     calls: list[tuple[str, ...]] = []
     mounted = False
 
@@ -263,6 +273,8 @@ def test_fuse_backend_builds_reversed_lowerdir_and_unmounts(
     assert "AddedKey=42" in (synthesized / "INI" / "base.ini").read_text(
         encoding="utf-8"
     )
+    # Consumed patch file is hidden via a FUSE whiteout marker.
+    assert (synthesized / "INI" / ".wh.base.patch.ini").is_file()
 
     backend.unmount(profile, workspace)
     assert not backend.is_mounted(profile)
@@ -283,7 +295,7 @@ def test_fuse_backend_errors_when_tool_missing_or_mount_fails(
         backend=BackendKind.FUSE_OVERLAYFS,
         persist_state=False,
     )
-    backend = FuseOverlayBackend()
+    backend = FUSEOverlayBackend()
 
     monkeypatch.setattr("mentara.overlay.shutil.which", lambda _n: None)
     with pytest.raises(MountError, match="fuse-overlayfs"):
@@ -320,3 +332,76 @@ def test_symlink_backend_rejects_corrupt_manifest(tmp_path: Path) -> None:
     manifest.write_text('{"persist_state": "nope"}', encoding="utf-8")
     with pytest.raises(OverlayError, match="invalid schema"):
         backend.unmount(profile)
+
+
+def _pack_simple_mix(entries: dict[str, bytes]) -> bytes:
+    items = [(mix_id(name), payload) for name, payload in entries.items()]
+    items.append((LMD_ID, build_lmd_blob(tuple(entries))))
+    items.sort(key=lambda pair: signed_id(pair[0]))
+    body = b"".join(payload for _, payload in items)
+    header = bytearray(10 + 12 * len(items))
+    struct.pack_into("<IHI", header, 0, 0, len(items), len(body))
+    offset = 0
+    for idx, (eid, payload) in enumerate(items):
+        struct.pack_into("<III", header, 10 + 12 * idx, eid, offset, len(payload))
+        offset += len(payload)
+    return bytes(header) + body
+
+
+def test_mix_cache_reuses_prunes_and_cleans(tmp_path: Path) -> None:
+    base_dir = tmp_path / "base"
+    layer_dir = tmp_path / "layer"
+    base_dir.mkdir()
+    (layer_dir / "expandmo99.mix").mkdir(parents=True)
+
+    (base_dir / "expandmo99.mix").write_bytes(
+        _pack_simple_mix({"rulesmo.ini": b"[General]\r\nSpeed=1\r\n"})
+    )
+    patch_file = layer_dir / "expandmo99.mix" / "rulesmo.patch.ini"
+    patch_file.write_text("[General]\nSpeed=4\n", encoding="utf-8")
+
+    config = MentaraConfig(
+        base_dir=str(base_dir),
+        runtime_dir=str(tmp_path / "runtime"),
+        state_dir=str(tmp_path / "state"),
+        backend=BackendKind.SYMLINK,
+        profiles={"test": ProfileConfig(layers=(str(layer_dir),))},
+        default_profile="test",
+    )
+    profile = resolve_profile(config, config_dir=tmp_path)
+    backend = SymlinkStagingBackend()
+    cache_dir = profile.runtime_dir / "mix-cache"
+
+    # First mount populates cache.
+    with activate_workspace(profile) as ws:
+        reopened = open_mix_archive(ws.merged_dir / "expandmo99.mix")
+        assert (
+            read_mix_entry_bytes(reopened, mix_id("rulesmo.ini"))
+            == b"[General]\r\nSpeed=4\r\n"
+        )
+    cached_first = list(cache_dir.glob("*.mix"))
+    assert len(cached_first) == 1
+    first_mtime = cached_first[0].stat().st_mtime_ns
+
+    # Second mount with unchanged inputs hits cache without rewriting.
+    with activate_workspace(profile):
+        pass
+    assert list(cache_dir.glob("*.mix")) == cached_first
+    assert cached_first[0].stat().st_mtime_ns == first_mtime
+
+    # Updating patch invalidates old entry and prunes stale cache file.
+    patch_file.write_text("[General]\nSpeed=99\n", encoding="utf-8")
+    with activate_workspace(profile) as ws:
+        reopened = open_mix_archive(ws.merged_dir / "expandmo99.mix")
+        assert (
+            read_mix_entry_bytes(reopened, mix_id("rulesmo.ini"))
+            == b"[General]\r\nSpeed=99\r\n"
+        )
+    cached_second = list(cache_dir.glob("*.mix"))
+    assert len(cached_second) == 1
+    assert cached_second[0] != cached_first[0]
+
+    # clean_state clears mix-cache as well.
+    assert not backend.is_mounted(profile)
+    assert clean_state(profile) is True
+    assert not cache_dir.exists()

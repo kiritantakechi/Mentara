@@ -112,20 +112,44 @@ Layers are applied from left to right on top of `base_dir`:
   per-profile state directory (`$XDG_STATE_HOME/mentara/<profile>/upper`),
   leaving both the original game directory and overlay layers untouched.
 
+## MIX Container Overlays & Automatic Decryption
+
+Mentara decrypts, sanitizes, and mixes `.mix` archives across all six TS/RA2/YR
+formats (`S1:standard`, `S2:mvmx` MVLoader AES-256-GCM + zlib with automatic
+`MVLoader.dll` key extraction, `S2b:fw_crypto`, `S3:westwood`, `S4:sanitize`,
+`S5a:shifted`, `S5b:count_recover`), including arbitrarily nested `.mix` archives:
+
+- **Encrypted `.mix` directly in an overlay layer** (e.g.
+  `overlays/mymod/expandmo95.mix`): under the default `[mix] decrypt = "layers"`
+  policy, encrypted, obfuscated, or nested-encrypted `.mix` archives in any
+  overlay layer are automatically decrypted into clean `S1:standard` archives
+  (cached by content fingerprint in `runtime_dir/mix-cache`). Already-clean
+  `S1:standard` archives and PE DLLs disguised as `.mix` stay zero-copy.
+- **`<stem>.patch.mix`**: merges entries from an overlay `.mix` (plain or
+  encrypted) onto the lower `<stem>.mix` by 32-bit MIX ID in strict layer order.
+- **`<archive>.mix/` directory**: patches text entries (`rulesmo.patch.ini`),
+  injects/replaces loose files (`extra.shp`), or descends into nested `.mix`
+  archives (`ra2md.mix/localmd.mix/rulesmd.patch.ini`,
+  `ra2md.mix/localmd.patch.mix`).
+
 ## Typical Layer Contents
 
 ```text
 overlays/<layer-name>/
-├── ddraw.dll                     # Custom renderer DLL override
-├── ddraw.ini                     # Custom renderer config
-├── Phobos.dll                    # Extra Syringe-injected DLL
-├── rulesmo.ini                   # Loose INI override (note ForbiddenFiles!)
-├── INI/
-│   └── Game Options/...
+├── ddraw.dll                          # Custom renderer DLL override
+├── ddraw.ini                          # Custom renderer config
+├── Phobos.dll                         # Extra Syringe-injected DLL
+├── expandmo92.mix                     # Standalone .mix (auto-decrypted if encrypted)
+├── expandmo99.patch.mix               # Entry-level binary MIX merge
+├── expandmo99.mix/
+│   ├── rulesmo.patch.ini              # Text patch inside expandmo99.mix
+│   └── uimd.patch.ini                 # Text patch inside expandmo99.mix
 └── Resources/
-    └── ClientDefinitions.ini     # Override if loosening ForbiddenFiles
+    └── ClientDefinitions.patch.ini    # INI entry-level patch
 ```
 
 > Note: `MentalOmegaClient.exe` checks `ForbiddenFiles` in
 > `Resources/ClientDefinitions.ini` (`rulesmo.ini,artmo.ini,soundmo.ini,aimo.ini`).
-> Run `just doctor` to catch case collisions and `ForbiddenFiles` conflicts early.
+> Patching `rulesmo.ini` inside `expandmo99.mix/` keeps the root directory clean
+> of loose `rulesmo.ini` files. Run `just doctor` to validate all patches and
+> MIX archives before launching.

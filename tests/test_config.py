@@ -7,6 +7,7 @@ import pytest
 from mentara.config import (
     BackendKind,
     MentaraConfig,
+    MIXDecryptMode,
     PlatformKind,
     ProfileOverrides,
     find_config_path,
@@ -278,3 +279,44 @@ def test_default_storage_roots_are_symmetric_across_linux_and_windows(
     expected_win_st = (local_app_data / "mentara" / "state" / "default").resolve()
     assert win_resolved.runtime_dir == expected_win_rt
     assert win_resolved.state_dir == expected_win_st
+
+
+def test_mix_config_inherits_and_validates_mvmx_secret(tmp_path: Path) -> None:
+    base_dir = tmp_path / "game"
+    base_dir.mkdir()
+    valid_secret = "a" * 64
+    cfg_path = tmp_path / "mentara.toml"
+    cfg_path.write_text(
+        f"""
+base_dir = "{base_dir}"
+runtime_dir = "{tmp_path / "rt"}"
+state_dir = "{tmp_path / "st"}"
+
+[mix]
+decrypt = "all"
+mvmx_secret = "{valid_secret}"
+
+[profiles.default]
+layers = []
+
+[profiles.raw]
+layers = []
+
+[profiles.raw.mix]
+decrypt = "patched"
+""",
+        encoding="utf-8",
+    )
+    loaded = load_config(cfg_path)
+    default_prof = resolve_profile(loaded, config_dir=tmp_path)
+    assert default_prof.mix.decrypt is MIXDecryptMode.ALL
+    assert default_prof.mix.mvmx_secret == valid_secret
+
+    raw_prof = resolve_profile(loaded, config_dir=tmp_path, profile_name="raw")
+    assert raw_prof.mix.decrypt is MIXDecryptMode.PATCHED
+    assert raw_prof.mix.mvmx_secret == valid_secret
+
+    bad_cfg = tmp_path / "bad.toml"
+    bad_cfg.write_text('[mix]\nmvmx_secret = "short"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="64 hex characters"):
+        load_config(bad_cfg)

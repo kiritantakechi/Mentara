@@ -9,13 +9,16 @@ Mentara 在启动游戏时自动维护一个与原版游戏目录解耦的虚拟
   - 整文件覆盖（`.dll`、`.mix`、`.ini`）、文本级补丁与 MIX 容器级解密合成职责完全正交，可跨多层按序组合。
   - **`<stem>.patch.{ini,map,yrm,mpr,cfg,inj}`（INI / 地图 / 键值级）**：直接由后缀确定目标格式（如 `ClientDefinitions.patch.ini` -> `ClientDefinitions.ini`、`c_aberration.patch.map` -> `c_aberration.map`、`aqrit.patch.cfg` -> `aqrit.cfg`、`Ares.dll.patch.inj` -> `Ares.dll.inj`）；支持分节与无节顶层 `Key=Value` 原地修改/新增（保留等号对齐）、`!Key` 删除键、`[-Section]` 删除整节、`+=Value` 自动按当前节最大数字键 `+1` 追加，完整保留注释与 CRLF 换行。
   - **`<target>.patch.toml`（通用明文行/块级）**：`[[text]]` 对称操作集（`replace`、`insert_before` / `insert_after`、`prepend` / `append`、`delete_lines`），适用于 `.config`、`.xml`、`.edb`、`.txt` 等任意明文。
-  - **`<archive>.mix/` 与 `<stem>.patch.mix`（MIX 容器级解密与混合）**：内置多级 MIX 解密与净化引擎（支持 S1 标准包、S2b CryptoRuntime RC4+MT19937 流加密包、S3 Westwood RSA-320 + Blowfish-ECB 加密包、S4 防解包 `0xFFFFFFFF` 哨兵/伪造尺寸/加权区间调度 DP 重叠诱饵剔除与孤立 XCC 文件名表雕刻、S5 坏计数索引恢复）。在叠层中创建 `<archive>.mix/` 目录（例如 `overlays/phobos/expandmo99.mix/rulesmo.patch.ini` 与 `uimd.patch.ini`）或放置 `<stem>.patch.mix`，即可直接对 `.mix` 包内任意条目打文本补丁或注入替换文件，并在虚拟工作区自动合成为标准未加密 `.mix` 归档，无需解包污染根目录。
+  - **`<archive>.mix/`、`<stem>.patch.mix` 与叠层加密 `.mix` 自动解密（MIX 容器级引擎）**：
+    - 内置对称六级 MIX 解密与净化引擎（`S1` 标准包、`S2` MVLoader `MVMXV1` 分块 AES-256-GCM + HKDF-SHA256 + zlib 并支持从 `MVLoader.dll` PE32 动态提取密钥、`S2b` CryptoRuntime `0x0004FFFF` RC4-sub + MT19937 流加密包、`S3` Westwood RSA-320 + Blowfish-ECB、`S4` 防解包 `0xFFFFFFFF` 哨兵 / 伪造尺寸 / 加权区间调度 DP 重叠诱饵剔除与孤立 XCC LMD 雕刻、`S5a` 移位头、`S5b` 坏计数恢复），自动启用 OpenSSL `libcrypto` 硬件加速并零依赖回退至纯 Python。
+    - 自动识别并跳过伪装为 `.mix` 的 Windows PE DLL（`MZ` + `PE\x00\x00`），避免误损扩展二进制。
+    - 支持任意深度的嵌套 `.mix` 递归解密与容器级修改（如 `ra2md.mix/localmd.mix/rulesmd.patch.ini`、`expandmo99.mix/rulesmo.patch.ini`、`<stem>.patch.mix`），严格按自底向上叠层顺序执行，并通过内容指纹缓存（`runtime_dir/mix-cache`）避免重复解密大体积归档。
+    - 可在 `mentara.toml` 中通过 `[mix]`（全局或按 Profile 覆盖）配置 `decrypt = "layers" | "all" | "patched"`（默认 `"layers"` 自动解密所有叠层中的加密/防解包 `.mix` 及被补丁的底层 `.mix`）与可选 `mvmx_secret`。
 - **Linux 与 Windows 对称设计**：
   - `[linux]` 与 `[windows]` 采用完全一致的 `PlatformConfig` 结构（`backend`、`runtime_dir`、`state_dir`、`runner`），同一份 `mentara.toml` 与 Profile 可在双平台直接运行。
-  - **Linux**：默认使用 `fuse-overlayfs` 零复制联合挂载，通过 `gamescope ... -- umu-run` 链式启动，挂载点与状态层分别位于 `$XDG_CACHE_HOME/mentara/runtime` 与 `$XDG_STATE_HOME/mentara`。
+  - **Linux**：默认使用 `fuse-overlayfs` 零复制联合挂载，自动通过 `.wh.` 白名单隐藏已消费的 `.patch.*` / `.patch.mix` 源文件以与 Windows 保持完全一致的虚拟目录视图，挂载点与状态层分别位于 `$XDG_CACHE_HOME/mentara/runtime` 与 `$XDG_STATE_HOME/mentara`。
   - **Windows**：默认使用 `symlink` 影子目录树（无开发者模式权限时自动回退至同卷 NTFS 硬链接 `os.link`，`.ini`/`.cfg`/存档隔离复制并在退出时回写），直接原生启动目标 `.exe`，挂载点与状态层位于 `%LOCALAPPDATA%\mentara`。
-- **通用命令链解析**：Runner 与 `doctor` 通过 `--` 分隔符统一解析任意包装器链（如 `gamescope ... -- umu-run`）中的每个可执行文件，无需针对特定工具打补丁。
-- **Mental Omega 专项诊断 (`doctor`)**：检查核心文件、大小写冲突（如 `RA2MO.ini` vs `ra2mo.ini`）、`ForbiddenFiles` 冲突及 `SyringeEx` 的 `ClientDefinitions.ini` 语法迁移。
+- **通用命令链解析与健康诊断 (`doctor`)**：Runner 与 `doctor` 通过 `--` 分隔符统一解析任意包装器链（如 `gamescope ... -- umu-run`），并校验基础目录、叠层目录、后端工具、目标可执行文件、大小写冲突以及全部文本补丁与 MIX 解密合成任务。
 
 ## 快速开始
 

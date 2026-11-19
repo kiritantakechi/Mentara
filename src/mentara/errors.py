@@ -148,6 +148,32 @@ class OverlayError(MentaraError):
         return cls(f"Missing {role} directory: {path}")
 
     @classmethod
+    def missing_file(cls, role: str, path: Path) -> Self:
+        """Build an error when a required source file is absent.
+
+        Args:
+            role: Human label such as `MIX archive` or `overlay file`.
+            path: Missing or non-file path.
+
+        Returns:
+            An `OverlayError` naming the missing file.
+        """
+        return cls(f"Missing {role} file: {path}")
+
+    @classmethod
+    def unreadable_file(cls, path: Path, detail: str) -> Self:
+        """Build an error when an overlay source file cannot be read.
+
+        Args:
+            path: File path that could not be opened or read.
+            detail: Underlying OS error detail.
+
+        Returns:
+            An `OverlayError` describing the read failure.
+        """
+        return cls(f"Failed to read overlay file {path}: {detail}")
+
+    @classmethod
     def missing_virtual_file(cls, path: Path) -> Self:
         """Build an error when a virtual file is absent from the plan.
 
@@ -232,6 +258,19 @@ class OverlayError(MentaraError):
             An `OverlayError` describing the invalid patch.
         """
         return cls(f"Invalid overlay patch {path}: {detail}")
+
+    @classmethod
+    def invalid_mix(cls, path: Path, detail: str) -> Self:
+        """Build an error when a MIX archive cannot be decoded or built.
+
+        Args:
+            path: MIX archive path or diagnostic label.
+            detail: Decryption, parsing, or composition failure detail.
+
+        Returns:
+            An `OverlayError` describing the invalid MIX archive.
+        """
+        return cls(f"Invalid MIX archive {path}: {detail}")
 
     @classmethod
     def patch_target_not_found(

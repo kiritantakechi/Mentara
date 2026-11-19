@@ -5,6 +5,7 @@ import shutil
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import assert_never
 
 from mentara.config import BackendKind, PlatformKind, ResolvedProfile
 from mentara.errors import OverlayError
@@ -85,7 +86,7 @@ def run_doctor(profile: ResolvedProfile) -> DoctorReport:
 
     _check_target_executable(profile, plan, diagnostics)
     _check_case_collisions(plan, diagnostics)
-    _check_patches(plan, diagnostics)
+    _check_synthesized_entries(plan, diagnostics)
 
     return DoctorReport(
         profile_name=profile.name,
@@ -129,11 +130,11 @@ def _check_layers(
         )
         return
 
-    for idx, layer in enumerate(profile.layers, start=1):
+    for index, layer in enumerate(profile.layers, start=1):
         if layer.is_dir():
             diagnostics.append(
                 Diagnostic(
-                    f"layer-{idx}",
+                    f"layer-{index}",
                     Severity.OK,
                     f"Overlay layer found: {layer}",
                 ),
@@ -141,7 +142,7 @@ def _check_layers(
         else:
             diagnostics.append(
                 Diagnostic(
-                    f"layer-{idx}",
+                    f"layer-{index}",
                     Severity.ERROR,
                     f"Overlay layer directory missing: {layer}",
                 ),
@@ -152,15 +153,20 @@ def _check_backend(
     profile: ResolvedProfile,
     diagnostics: list[Diagnostic],
 ) -> None:
-    if profile.backend is BackendKind.SYMLINK:
-        diagnostics.append(
-            Diagnostic(
-                "backend",
-                Severity.OK,
-                "Using symlink/hardlink staging backend (cross-platform).",
-            ),
-        )
-        return
+    match profile.backend:
+        case BackendKind.SYMLINK:
+            diagnostics.append(
+                Diagnostic(
+                    "backend",
+                    Severity.OK,
+                    "Using symlink/hardlink staging backend (cross-platform).",
+                ),
+            )
+            return
+        case BackendKind.FUSE_OVERLAYFS:
+            pass
+        case _:
+            assert_never(profile.backend)
 
     if profile.platform is not PlatformKind.LINUX:
         diagnostics.append(
@@ -318,7 +324,7 @@ def _check_case_collisions(
         )
 
 
-def _check_patches(
+def _check_synthesized_entries(
     plan: OverlayPlan,
     diagnostics: list[Diagnostic],
 ) -> None:
@@ -326,10 +332,12 @@ def _check_patches(
     if not synthesized:
         return
 
+    had_error = False
     for entry in synthesized:
         try:
-            validate_synthesized_entry(entry)
+            validate_synthesized_entry(entry, context=plan.mix_context)
         except OverlayError as exc:
+            had_error = True
             diagnostics.append(
                 Diagnostic(
                     "patches",
@@ -337,12 +345,9 @@ def _check_patches(
                     str(exc),
                 ),
             )
-            return
 
-    diagnostics.append(
-        Diagnostic(
-            "patches",
-            Severity.OK,
-            f"All {len(synthesized)} synthesized/patched file(s) validated cleanly.",
-        ),
-    )
+    if not had_error:
+        message = (
+            f"All {len(synthesized)} synthesized/patched file(s) validated cleanly."
+        )
+        diagnostics.append(Diagnostic("patches", Severity.OK, message))

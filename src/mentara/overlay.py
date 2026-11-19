@@ -9,13 +9,21 @@ import tempfile
 import time
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, Self
+from typing import Final, Protocol, Self, assert_never
 
 from mentara.config import BackendKind, PlatformKind, ResolvedProfile
 from mentara.errors import MountError, OverlayError
+from mentara.mix import (
+    MIXArchiveOp,
+    MIXContext,
+    MIXFileOp,
+    MIXPatchOp,
+    mix_context_secret_digest,
+)
 from mentara.planner import (
+    WHITEOUT_PREFIX,
     EntryOrigin,
     FileEntry,
     LayerSource,
@@ -26,7 +34,7 @@ from mentara.planner import (
 )
 
 __all__ = [
-    "FuseOverlayBackend",
+    "FUSEOverlayBackend",
     "MountedWorkspace",
     "OverlayBackend",
     "SymlinkStagingBackend",
@@ -37,14 +45,16 @@ __all__ = [
     "profile_sources",
 ]
 
-_LOGGER = logging.getLogger(__name__)
-_MANIFEST_FILENAME = ".mentara-staged.json"
-_SYNTHESIZED_DIRNAME = "synthesized"
-_EPHEMERAL_DIRNAME = "ephemeral"
-_UPPER_DIRNAME = "upper"
-_WORK_DIRNAME = "work"
-_UNMOUNT_ATTEMPTS = 20
-_UNMOUNT_RETRY_DELAY_SECONDS = 0.25
+_LOGGER: Final = logging.getLogger(__name__)
+_MANIFEST_FILENAME: Final[str] = ".mentara-staged.json"
+_SYNTHESIZED_DIRNAME: Final[str] = "synthesized"
+_MIX_CACHE_DIRNAME: Final[str] = "mix-cache"
+_MIX_CACHE_VERSION: Final[str] = "mentara-mix-v1"
+_EPHEMERAL_DIRNAME: Final[str] = "ephemeral"
+_UPPER_DIRNAME: Final[str] = "upper"
+_WORK_DIRNAME: Final[str] = "work"
+_UNMOUNT_ATTEMPTS_MAX: Final[int] = 20
+_UNMOUNT_RETRY_DELAY_SECONDS: Final[float] = 0.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +114,7 @@ class OverlayBackend(Protocol):
         ...
 
 
-class FuseOverlayBackend:
+class FUSEOverlayBackend:
     """Zero-copy rootless union mount powered by `fuse-overlayfs`."""
 
     kind: BackendKind = BackendKind.FUSE_OVERLAYFS
@@ -112,9 +122,10 @@ class FuseOverlayBackend:
     def mount(self, profile: ResolvedProfile) -> MountedWorkspace:
         """Mount `base_dir`, overlay layers, and upperdir via FUSE.
 
-        Any `.patch.ini` or `.patch.toml` entries are rendered into an
-        ephemeral top-level read-only `lowerdir` (`synthesized`) so
-        `state/upper` stays clean of unmodified files.
+        Synthesized text patches and decrypted/composed MIX archives are
+        rendered into an ephemeral top-level read-only `lowerdir`
+        (`synthesized`) so `state/upper` stays clean of unmodified
+        files.
 
         Args:
             profile: Resolved launcher profile.
@@ -125,8 +136,8 @@ class FuseOverlayBackend:
         Raises:
             MountError: If the host platform is not Linux, FUSE tools
                 are missing, or mounting fails.
-            OverlayError: If source directories are missing, patches
-                fail to render, or target is busy/non-empty.
+            OverlayError: If source directories are missing, patches or
+                MIX archives fail to synthesize, or target is non-empty.
         """
         if profile.platform is not PlatformKind.LINUX:
             raise MountError.unsupported_platform(
@@ -146,16 +157,21 @@ class FuseOverlayBackend:
         plan = plan_profile(profile)
         upper_dir, work_dir, ephemeral_root = _prepare_fuse_dirs(profile)
         synthesized_entries = plan.synthesized_entries()
+        mix_cache_dir = _mix_cache_dir_for(profile)
 
         try:
             lower_list: list[Path] = []
-            if synthesized_entries:
-                _materialize_synthesized_files(
-                    synthesized_entries,
+            if synthesized_entries or plan.hidden_paths:
+                active_mix_keys = _materialize_synthesized_files(
+                    plan,
                     target_root=synthesized_dir,
                     upper_dir=profile.upper_dir,
+                    mix_cache_dir=mix_cache_dir,
                 )
+                _prune_mix_cache(mix_cache_dir, active_mix_keys)
                 lower_list.append(synthesized_dir)
+            else:
+                _prune_mix_cache(mix_cache_dir, frozenset())
             lower_list.extend(reversed(profile.layers))
             lower_list.append(profile.base_dir)
         except Exception:
@@ -243,7 +259,7 @@ class FuseOverlayBackend:
         unmount_flag = "-uz" if lazy else "-u"
         command = (unmount_bin, unmount_flag, str(merged_dir))
 
-        for attempt in range(1, _UNMOUNT_ATTEMPTS + 1):
+        for attempt in range(1, _UNMOUNT_ATTEMPTS_MAX + 1):
             result = subprocess.run(  # noqa: S603 - fixed fusermount binary
                 command,
                 capture_output=True,
@@ -257,11 +273,11 @@ class FuseOverlayBackend:
             _LOGGER.debug(
                 "Unmount attempt %d/%d failed for %s: %s",
                 attempt,
-                _UNMOUNT_ATTEMPTS,
+                _UNMOUNT_ATTEMPTS_MAX,
                 merged_dir,
                 result.stderr.strip(),
             )
-            if attempt == _UNMOUNT_ATTEMPTS:
+            if attempt == _UNMOUNT_ATTEMPTS_MAX:
                 raise MountError.command_failed(
                     command,
                     result.returncode,
@@ -291,8 +307,8 @@ class SymlinkStagingBackend:
 
         Read-only assets are symlinked (falling back to hardlinks on
         Windows when unprivileged), files matching `copy_patterns` are
-        copied, and `.patch.ini`/`.patch.toml` targets are rendered into
-        isolated copies.
+        copied, text patches are rendered into isolated copies, and
+        decrypted/composed MIX archives are linked from `mix-cache`.
 
         Args:
             profile: Resolved launcher profile.
@@ -302,7 +318,7 @@ class SymlinkStagingBackend:
 
         Raises:
             OverlayError: If already active, target non-empty, or source
-                directories/patches are invalid.
+                directories/patches/MIX archives are invalid.
         """
         _validate_source_directories(profile)
         merged_dir = profile.merged_dir
@@ -314,26 +330,25 @@ class SymlinkStagingBackend:
 
         plan = plan_profile(profile)
         upper_dir = profile.upper_dir
-        copied_hashes: dict[str, str] = {}
-        linked_files: list[str] = []
+        stage = _StageState(
+            merged_dir=merged_dir,
+            mix_cache_dir=_mix_cache_dir_for(profile),
+            mix_context=plan.mix_context,
+        )
 
         try:
-            for rel_dir in plan.directories:
-                (merged_dir / rel_dir).mkdir(parents=True, exist_ok=True)
+            for relative_dir in plan.directories:
+                (merged_dir / relative_dir).mkdir(parents=True, exist_ok=True)
 
             for entry in plan.entries:
-                _stage_entry(
-                    entry,
-                    merged_dir=merged_dir,
-                    copied_hashes=copied_hashes,
-                    linked_files=linked_files,
-                )
+                _stage_entry(entry, stage)
 
+            _prune_mix_cache(stage.mix_cache_dir, frozenset(stage.active_mix_keys))
             manifest = _StagingManifest(
                 persist_state=profile.persist_state,
                 upper_dir=upper_dir,
-                copied_hashes=frozendict(copied_hashes),
-                linked_files=frozenset(linked_files),
+                copied_hashes=frozendict(stage.copied_hashes),
+                linked_files=frozenset(stage.linked_files),
             )
             _write_json_atomic(manifest_path, manifest.to_dict())
         except Exception:
@@ -416,13 +431,15 @@ def get_backend(kind: BackendKind) -> OverlayBackend:
     """
     match kind:
         case BackendKind.FUSE_OVERLAYFS:
-            return FuseOverlayBackend()
+            return FUSEOverlayBackend()
         case BackendKind.SYMLINK:
             return SymlinkStagingBackend()
+        case _:
+            assert_never(kind)
 
 
 def clean_state(profile: ResolvedProfile) -> bool:
-    """Remove persisted writable runtime state for `profile`.
+    """Remove persisted writable state and MIX cache for `profile`.
 
     Does not touch `base_dir` or any overlay layer. Refuses to run if
     either backend currently has `profile` mounted.
@@ -431,8 +448,8 @@ def clean_state(profile: ResolvedProfile) -> bool:
         profile: Resolved launcher profile.
 
     Returns:
-        `True` if `profile.state_dir` existed and was deleted, otherwise
-        `False`.
+        `True` if persisted state or MIX cache existed and was deleted,
+        otherwise `False`.
 
     Raises:
         OverlayError: If `profile` currently has an active workspace.
@@ -441,10 +458,15 @@ def clean_state(profile: ResolvedProfile) -> bool:
         if get_backend(kind).is_mounted(profile):
             raise OverlayError.already_active(profile.merged_dir)
 
-    if not profile.state_dir.exists():
-        return False
-    shutil.rmtree(profile.state_dir)
-    return True
+    removed = False
+    if profile.state_dir.exists():
+        shutil.rmtree(profile.state_dir)
+        removed = True
+    mix_cache_dir = _mix_cache_dir_for(profile)
+    if mix_cache_dir.exists():
+        shutil.rmtree(mix_cache_dir)
+        removed = True
+    return removed
 
 
 def profile_sources(
@@ -511,6 +533,11 @@ def plan_profile(
     return build_overlay_plan(
         profile_sources(profile, include_state=include_state),
         copy_patterns=profile.copy_patterns,
+        mix_decrypt=profile.mix.decrypt,
+        mix_context=MIXContext(
+            search_dirs=(*reversed(profile.layers), profile.base_dir),
+            mvmx_secret_hex=profile.mix.mvmx_secret,
+        ),
     )
 
 
@@ -534,6 +561,10 @@ def activate_workspace(
         backend.unmount(profile, workspace)
 
 
+class _ByteHasher(Protocol):
+    def update(self, data: bytes, /) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _StagingManifest:
     persist_state: bool
@@ -542,7 +573,6 @@ class _StagingManifest:
     linked_files: frozenset[str]
 
     def to_dict(self) -> dict[str, object]:
-        """Serialise the manifest to a JSON-compatible mapping."""
         return {
             "persist_state": self.persist_state,
             "upper_dir": (str(self.upper_dir) if self.upper_dir is not None else None),
@@ -557,7 +587,6 @@ class _StagingManifest:
         *,
         source_path: Path,
     ) -> Self:
-        """Reconstruct a `_StagingManifest` from `to_dict` output."""
         persist_state = raw.get("persist_state")
         upper_raw = raw.get("upper_dir")
         copied_raw = raw.get("copied_hashes")
@@ -592,32 +621,52 @@ class _StagingManifest:
         )
 
 
-def _stage_entry(
-    entry: FileEntry,
-    *,
-    merged_dir: Path,
-    copied_hashes: dict[str, str],
-    linked_files: list[str],
-) -> None:
-    target = merged_dir / entry.relative_path
+# Mutable staging accumulator populated during a single symlink mount.
+@dataclass(slots=True)
+class _StageState:
+    merged_dir: Path
+    mix_cache_dir: Path
+    mix_context: MIXContext
+    copied_hashes: dict[str, str] = field(default_factory=dict)
+    linked_files: list[str] = field(default_factory=list)
+    active_mix_keys: set[str] = field(default_factory=set)
+
+
+def _stage_entry(entry: FileEntry, stage: _StageState) -> None:
+    target = stage.merged_dir / entry.relative_path
     target.parent.mkdir(parents=True, exist_ok=True)
-    rel_posix = entry.relative_path.as_posix()
+    relative_posix = entry.relative_path.as_posix()
     match entry.materialization:
-        case Materialization.PATCH | Materialization.MIX:
-            materialize_synthesized_entry(entry, target)
-            copied_hashes[rel_posix] = _sha256_file(target)
+        case Materialization.PATCH:
+            materialize_synthesized_entry(entry, target, context=stage.mix_context)
+            stage.copied_hashes[relative_posix] = _sha256_file(target)
+        case Materialization.MIX:
+            cached_path, cache_name = _ensure_cached_mix(
+                entry,
+                cache_dir=stage.mix_cache_dir,
+                context=stage.mix_context,
+            )
+            stage.active_mix_keys.add(cache_name)
+            _link_readonly(cached_path, target)
+            stage.linked_files.append(relative_posix)
         case Materialization.COPY:
             if entry.source_path is not None:
                 shutil.copy2(entry.source_path, target)
-                copied_hashes[rel_posix] = _sha256_file(target)
+                stage.copied_hashes[relative_posix] = _sha256_file(target)
         case Materialization.SYMLINK:
             if entry.source_path is not None:
                 _link_readonly(entry.source_path, target)
-                linked_files.append(rel_posix)
+                stage.linked_files.append(relative_posix)
+        case _:
+            assert_never(entry.materialization)
 
 
 def _synthesized_dir_for(profile: ResolvedProfile) -> Path:
     return profile.runtime_dir / _SYNTHESIZED_DIRNAME
+
+
+def _mix_cache_dir_for(profile: ResolvedProfile) -> Path:
+    return profile.runtime_dir / _MIX_CACHE_DIRNAME
 
 
 def _manifest_path_for(profile: ResolvedProfile) -> Path:
@@ -666,24 +715,116 @@ def _prepare_fuse_dirs(
 
 
 def _materialize_synthesized_files(
-    entries: Sequence[FileEntry],
+    plan: OverlayPlan,
     *,
     target_root: Path,
     upper_dir: Path | None,
-) -> None:
+    mix_cache_dir: Path,
+) -> frozenset[str]:
     if target_root.exists():
         shutil.rmtree(target_root)
     target_root.mkdir(parents=True, exist_ok=True)
 
-    for entry in entries:
+    active_mix_keys: set[str] = set()
+    for entry in plan.synthesized_entries():
         target = target_root / entry.relative_path
-        materialize_synthesized_entry(entry, target)
-        if (
-            entry.materialization is Materialization.PATCH
-            and upper_dir is not None
-            and (upper_dir / entry.relative_path).is_file()
-        ):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if entry.materialization is Materialization.MIX:
+            cached_path, cache_name = _ensure_cached_mix(
+                entry,
+                cache_dir=mix_cache_dir,
+                context=plan.mix_context,
+            )
+            active_mix_keys.add(cache_name)
+            _link_or_copy(cached_path, target)
+        else:
+            materialize_synthesized_entry(entry, target, context=plan.mix_context)
+
+        if upper_dir is not None and (upper_dir / entry.relative_path).is_file():
             shutil.copy2(target, upper_dir / entry.relative_path)
+
+    for relative_hidden in plan.hidden_paths:
+        whiteout = (
+            target_root
+            / relative_hidden.parent
+            / f"{WHITEOUT_PREFIX}{relative_hidden.name}"
+        )
+        whiteout.parent.mkdir(parents=True, exist_ok=True)
+        whiteout.write_bytes(b"")
+
+    return frozenset(active_mix_keys)
+
+
+def _ensure_cached_mix(
+    entry: FileEntry,
+    *,
+    cache_dir: Path,
+    context: MIXContext,
+) -> tuple[Path, str]:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    digest = _mix_fingerprint(entry, context=context)
+    cache_name = f"{digest}.mix"
+    cache_path = cache_dir / cache_name
+    if not cache_path.is_file():
+        materialize_synthesized_entry(entry, cache_path, context=context)
+    return cache_path, cache_name
+
+
+def _mix_fingerprint(entry: FileEntry, *, context: MIXContext) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(_MIX_CACHE_VERSION.encode("utf-8"))
+    hasher.update(b"\x00")
+    hasher.update(entry.relative_path.as_posix().encode("utf-8"))
+    hasher.update(b"\x00key:")
+    hasher.update(mix_context_secret_digest(context))
+
+    if entry.source_path is not None:
+        _hash_path_stat(hasher, "base", entry.source_path)
+
+    for op in entry.mix_ops:
+        hasher.update(b"\x00target:")
+        hasher.update("/".join(op.target_path).encode("utf-8"))
+        match op:
+            case MIXArchiveOp():
+                _hash_path_stat(hasher, "archive", op.source_path)
+            case MIXFileOp():
+                _hash_path_stat(hasher, "file", op.source_path)
+            case MIXPatchOp():
+                _hash_path_stat(
+                    hasher,
+                    f"patch:{op.patch.kind.value}",
+                    op.patch.source_path,
+                )
+            case _:
+                assert_never(op)
+    return hasher.hexdigest()
+
+
+def _hash_path_stat(hasher: _ByteHasher, tag: str, path: Path) -> None:
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        raise OverlayError.unreadable_file(path, str(exc)) from exc
+    record = f"\x00{tag}:{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}"
+    hasher.update(record.encode("utf-8"))
+
+
+def _prune_mix_cache(cache_dir: Path, active_names: frozenset[str]) -> None:
+    if not cache_dir.is_dir():
+        return
+    for candidate in cache_dir.iterdir():
+        if candidate.is_file() and candidate.name not in active_names:
+            candidate.unlink(missing_ok=True)
+    if not active_names:
+        with suppress(OSError):
+            cache_dir.rmdir()
+
+
+def _link_or_copy(source: Path, target: Path) -> None:
+    try:
+        target.hardlink_to(source)
+    except OSError:
+        shutil.copy2(source, target)
 
 
 def _cleanup_fuse_dirs(
@@ -781,22 +922,24 @@ def _sync_staged_changes(
         return
 
     for current_dir, _dirnames, filenames in merged_dir.walk():
-        rel_dir = current_dir.relative_to(merged_dir)
+        relative_dir = current_dir.relative_to(merged_dir)
         for filename in filenames:
             full_path = current_dir / filename
             if full_path.is_symlink() or not full_path.is_file():
                 continue
 
-            rel_path = Path(filename) if rel_dir == Path() else rel_dir / filename
-            rel_posix = rel_path.as_posix()
-            if rel_posix in linked_files and full_path.stat().st_nlink > 1:
+            relative_path = (
+                Path(filename) if relative_dir == Path() else relative_dir / filename
+            )
+            relative_posix = relative_path.as_posix()
+            if relative_posix in linked_files and full_path.stat().st_nlink > 1:
                 continue
 
-            recorded_hash = copied_hashes.get(rel_posix)
+            recorded_hash = copied_hashes.get(relative_posix)
             if recorded_hash is not None and _sha256_file(full_path) == recorded_hash:
                 continue
 
-            destination = upper_dir / rel_path
+            destination = upper_dir / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(full_path, destination)
-            _LOGGER.debug("Persisted modified file to state: %s", rel_posix)
+            _LOGGER.debug("Persisted modified file to state: %s", relative_posix)
