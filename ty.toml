@@ -1,0 +1,33 @@
+# Validated against ty 0.0.107. Pin this version exactly: ty is 0.0.x and states
+# that breaking changes, INCLUDING CHANGES TO DIAGNOSTICS, may occur between any
+# two releases. Moving the pin is a reviewed event.
+[environment]
+python-version = "3.15"
+
+[rules]
+blanket-ignore-comment = "error"
+dynamic-function-decorator-return = "error"
+missing-override-decorator = "error"
+missing-type-argument = "error"
+unsound-assignment = "error"
+unsound-return = "error"
+unsound-yield = "error"
+unsupported-dynamic-base = "error"
+disjoint-cast = "error"
+mismatched-sentinel-name = "error"
+invalid-legacy-positional-parameter = "warn"
+
+division-by-zero = "warn"
+possibly-missing-attribute = "warn"
+possibly-missing-import = "warn"
+possibly-unresolved-reference = "warn"
+redundant-condition-strict = "warn"
+truthiness-test-of-none-union = "warn"
+
+[analysis]
+strict-equality-semantics = true
+strict-generic-narrowing = true
+
+[terminal]
+error-on-warning = true
+output-format = "concise"

@@ -1,0 +1,68 @@
+# Validated against ruff 0.17.6. Pin this version: `select = ["ALL"]` means a
+# release that adds a rule changes what your build enforces.
+target-version = "py315"
+line-length = 88
+indent-width = 4
+src = ["src", "tests"]
+
+output-format = "concise"
+
+[lint]
+# Stable rules only. Preview rules move between releases, and py315 needs no
+# preview since 0.17.
+select = ["ALL"]
+
+ignore = [
+  # Ruff's own documented formatter-conflict list. D203 is on it too, and is
+  # not repeated here: the google convention below already turns it off.
+  # https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
+  "W191", "E111", "E114", "E117",  # indentation is the formatter's job
+  "D206", "D300",                  # docstring indent and quotes likewise
+  "Q000", "Q001", "Q002", "Q003", "Q004",
+  "COM812", "COM819",
+  "ISC002",
+
+  # Redundant with the formatter.
+  "D207", "D208",
+
+  # Policy, not correctness.
+  "CPY001",
+]
+
+[lint.pycodestyle]
+# PEP 8's 72 for docstring and comment prose, which the formatter does not wrap.
+max-doc-length = 72
+
+[lint.flake8-pytest-style]
+raises-require-match-for = ["*"]
+
+[lint.flake8-implicit-str-concat]
+allow-multiline = false
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[lint.flake8-type-checking]
+runtime-evaluated-base-classes = [
+  "pydantic.BaseModel",
+  "sqlalchemy.orm.DeclarativeBase",
+]
+runtime-evaluated-decorators = [
+  "attrs.define",
+  "pydantic.validate_call",
+]
+
+[lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106", "S107", "PLR2004", "SLF001", "INP001", "D103"]
+"**/conftest.py" = ["INP001"]
+
+[format]
+preview = false
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+skip-magic-trailing-comma = false

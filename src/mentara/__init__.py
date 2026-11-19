@@ -1,2 +1,90 @@
-def main() -> None:
-    print("Hello from mentara!")
+"""Mentara: virtual overlay launcher for Mental Omega."""
+
+from mentara.cli import main
+from mentara.config import (
+    BackendKind,
+    MentaraConfig,
+    ProfileConfig,
+    ProfileOverrides,
+    ResolvedProfile,
+    ResolvedRunner,
+    RunnerConfig,
+    RunnerOverrideConfig,
+    find_config_path,
+    load_config,
+    resolve_profile,
+)
+from mentara.doctor import Diagnostic, DoctorReport, Severity, run_doctor
+from mentara.errors import (
+    ConfigError,
+    MentaraError,
+    MountError,
+    OverlayError,
+    RunnerError,
+)
+from mentara.overlay import (
+    FuseOverlayBackend,
+    MountedWorkspace,
+    OverlayBackend,
+    SymlinkStagingBackend,
+    activate_workspace,
+    get_backend,
+    plan_profile,
+)
+from mentara.planner import (
+    CaseCollision,
+    EntryOrigin,
+    FileEntry,
+    LayerSource,
+    Materialization,
+    OverlayPlan,
+    build_overlay_plan,
+)
+from mentara.runner import (
+    LaunchResult,
+    LaunchSpec,
+    build_launch_spec,
+    execute_launch,
+)
+
+__all__ = [
+    "BackendKind",
+    "CaseCollision",
+    "ConfigError",
+    "Diagnostic",
+    "DoctorReport",
+    "EntryOrigin",
+    "FileEntry",
+    "FuseOverlayBackend",
+    "LaunchResult",
+    "LaunchSpec",
+    "LayerSource",
+    "Materialization",
+    "MentaraConfig",
+    "MentaraError",
+    "MountError",
+    "MountedWorkspace",
+    "OverlayBackend",
+    "OverlayError",
+    "OverlayPlan",
+    "ProfileConfig",
+    "ProfileOverrides",
+    "ResolvedProfile",
+    "ResolvedRunner",
+    "RunnerConfig",
+    "RunnerError",
+    "RunnerOverrideConfig",
+    "Severity",
+    "SymlinkStagingBackend",
+    "activate_workspace",
+    "build_launch_spec",
+    "build_overlay_plan",
+    "execute_launch",
+    "find_config_path",
+    "get_backend",
+    "load_config",
+    "main",
+    "plan_profile",
+    "resolve_profile",
+    "run_doctor",
+]

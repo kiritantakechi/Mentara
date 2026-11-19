@@ -1,28 +1,53 @@
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14.0"]
+build-backend = "uv_build"
+
 [project]
 name = "mentara"
 version = "0.1.0"
-description = "Add your description here"
+description = "Virtual overlay launcher for Mental Omega."
 readme = "README.md"
-authors = [
-    { name = "kiritantakechi", email = "kiritantakechi@gmail.com" }
-]
 requires-python = ">=3.15"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "kiritantakechi", email = "kiritantakechi@gmail.com" },
+]
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.15",
+    "Typing :: Typed",
+]
 dependencies = [
-    "pydantic>=2.14.4",
+    "pydantic>=2.14",
 ]
 
 [project.scripts]
 mentara = "mentara:main"
 
-[build-system]
-requires = ["uv_build>=0.13.8,<0.14.0"]
-build-backend = "uv_build"
-
 [dependency-groups]
-dev = [
-    "pre-commit>=4.7.0",
-    "pytest>=9.2.0",
-    "pytest-cov>=7.1.0",
-    "ruff>=0.17.6",
-    "ty>=0.0.107",
+test = [
+    "pytest==9.2.0",
+    "pytest-cov==7.1.0",
 ]
+lint = [
+    "ruff==0.17.6",
+]
+typecheck = [
+    "ty==0.0.107",
+]
+dev = [
+    { include-group = "test" },
+    { include-group = "lint" },
+    { include-group = "typecheck" },
+    "pre-commit==4.7.0",
+]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { pre-commit = false, pytest = false, pytest-cov = false, ruff = false, ty = false }
+
+[tool.pytest]
+testpaths = ["tests"]
+strict = true
