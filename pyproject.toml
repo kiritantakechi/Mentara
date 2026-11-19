@@ -1,0 +1,28 @@
+[project]
+name = "mentara"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "kiritantakechi", email = "kiritantakechi@gmail.com" }
+]
+requires-python = ">=3.15"
+dependencies = [
+    "pydantic>=2.14.4",
+]
+
+[project.scripts]
+mentara = "mentara:main"
+
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.6",
+    "ty>=0.0.107",
+]
