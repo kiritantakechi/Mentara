@@ -212,3 +212,22 @@ def test_find_config_path_walks_upward(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="Configuration file not found"):
         find_config_path(explicit=tmp_path / "missing.toml")
+
+
+def test_default_runtime_root_uses_xdg_cache_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_home = tmp_path / "xdg-cache"
+    state_home = tmp_path / "xdg-state"
+    base_dir = tmp_path / "game"
+    base_dir.mkdir()
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    config = MentaraConfig(base_dir=str(base_dir))
+    resolved = resolve_profile(config, config_dir=tmp_path)
+
+    expected_runtime = (cache_home / "mentara" / "runtime" / "default").resolve()
+    assert resolved.runtime_dir == expected_runtime
+    assert resolved.state_dir == (state_home / "mentara" / "default").resolve()

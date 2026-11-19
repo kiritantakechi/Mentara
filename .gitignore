@@ -16,3 +16,6 @@ build/
 mentara.local.toml
 .runtime/
 .state/
+
+# Large debug symbol databases (e.g. Phobos.pdb)
+*.pdb

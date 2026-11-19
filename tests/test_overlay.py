@@ -212,6 +212,11 @@ def test_fuse_backend_builds_reversed_lowerdir_and_unmounts(
     assert not backend.is_mounted(profile)
     assert len(calls) == 3
 
+    # Lazy unmount passes `-uz` to fusermount3.
+    mounted = True
+    backend.unmount(profile, workspace, lazy=True)
+    assert calls[-1][1] == "-uz"
+
 
 def test_fuse_backend_errors_when_tool_missing_or_mount_fails(
     tmp_path: Path,

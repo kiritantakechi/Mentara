@@ -234,6 +234,8 @@ def _scan_source(
         for filename in sorted(filenames):
             if is_top_level and filename in excluded:
                 continue
+            if source.origin is EntryOrigin.STATE and filename.startswith(".wh."):
+                continue
             rel_file = Path(filename) if is_top_level else rel_dir / filename
             full_path = current_dir / filename
             if not (full_path.is_file() or full_path.is_symlink()):

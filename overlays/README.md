@@ -3,6 +3,17 @@
 Each subdirectory here represents an independent overlay layer stacked on top of
 the original Mental Omega game directory.
 
+## Included Layers
+
+- `overlays/phobos/`: Upstream **Phobos `v0.5-alpha2`** (`Phobos.dll`,
+  bundled `Syringe.exe` / SyringeEx `0.1.0.2`, `gamemd.edb`,
+  `Syringe.LICENSE.txt`, and `Phobos.pdb` which is excluded from Git via
+  `*.pdb` in `.gitignore`).
+  - Source: https://github.com/Phobos-developers/Phobos/releases/tag/v0.5-alpha2
+  - Stacked *below* `overlays/base` so local overrides in `overlays/base`
+    always take precedence.
+- `overlays/base/`: Your local custom INI / DLL overrides.
+
 ## How Layering Works
 
 Configure ordered layers in `mentara.toml`:

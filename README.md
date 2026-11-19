@@ -67,7 +67,7 @@ just mount
 just unmount
 ```
 
-> 虚拟挂载点默认位于 `$XDG_RUNTIME_DIR/mentara/<profile>/merged`，可写持久化层默认位于 `$XDG_STATE_HOME/mentara/<profile>/upper`，均处于原游戏目录之外，避免 `Mentara/` 位于游戏根目录内造成嵌套递归。
+> 虚拟挂载点默认位于 `$XDG_CACHE_HOME/mentara/runtime/<profile>/merged`（默认 `~/.cache/mentara/runtime/<profile>/merged`），可写持久化层默认位于 `$XDG_STATE_HOME/mentara/<profile>/upper`，均位于 `$HOME` 下且独立于原游戏目录——既避免 `Mentara/` 嵌套递归，也避免 `umu-run` / `steamrt` (`bwrap`) 在 `/run/user/$UID` 或 `/tmp` 中的容器挂载冲突。
 
 ## 开发与质量门禁
 

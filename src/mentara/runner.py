@@ -3,11 +3,15 @@
 import logging
 import os
 import shutil
+import signal
 import subprocess
+import threading
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
-lazy from collections.abc import Mapping
+lazy from collections.abc import Callable, Generator, Mapping
+lazy from types import FrameType
 
 from mentara.errors import RunnerError
 lazy from mentara.config import ResolvedProfile
@@ -90,6 +94,10 @@ def build_launch_spec(
 def execute_launch(spec: LaunchSpec) -> LaunchResult:
     """Run the configured game process and wait for exit.
 
+    Installs a temporary `SIGTERM` handler on the main thread so clean
+    termination unwinds callers (such as FUSE unmounts) after stopping
+    the child process group.
+
     Args:
         spec: Fully prepared `LaunchSpec`.
 
@@ -112,14 +120,16 @@ def execute_launch(spec: LaunchSpec) -> LaunchResult:
             spec.argv,
             cwd=spec.cwd,
             env=dict(spec.env),
+            start_new_session=True,
         )
     except OSError as exc:
         raise RunnerError.spawn_failed(spec.argv, str(exc)) from exc
 
     try:
-        returncode = process.wait()
+        with _sigterm_as_interrupt():
+            returncode = process.wait()
     except KeyboardInterrupt:
-        _terminate_process(process)
+        _terminate_process_group(process)
         raise
 
     return LaunchResult(spec=spec, returncode=returncode)
@@ -141,14 +151,38 @@ def _ensure_runner_exists(program: str, *, path_env: str | None) -> None:
         raise RunnerError.missing_runner(program)
 
 
-def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+@contextmanager
+def _sigterm_as_interrupt() -> Generator[None]:
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _handle_sigterm(_signum: int, _frame: FrameType | None) -> None:
+        raise KeyboardInterrupt
+
+    previous: Callable[[int, FrameType | None], object] | int | None = signal.signal(
+        signal.SIGTERM,
+        _handle_sigterm,
+    )
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
-    _LOGGER.warning("Interrupted; terminating child process %s", process.pid)
-    process.terminate()
+    _LOGGER.warning("Interrupted; terminating process group %s", process.pid)
+    with suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
     try:
         process.wait(timeout=_TERMINATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        _LOGGER.warning("Child process %s did not exit; killing", process.pid)
-        process.kill()
+        _LOGGER.warning(
+            "Process group %s did not exit; sending SIGKILL",
+            process.pid,
+        )
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
         process.wait()

@@ -97,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Unmount or tear down an active virtual workspace.",
     )
     _add_profile_flags(unmount_parser)
+    unmount_parser.add_argument(
+        "--lazy",
+        action="store_true",
+        help="Use lazy FUSE unmount (fusermount3 -uz) if busy.",
+    )
 
     inspect_parser = subparsers.add_parser(
         "inspect",
@@ -202,6 +207,13 @@ def _add_profile_flags(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Override overlay backend.",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Enable debug logging on stderr.",
+    )
 
 
 def _configure_logging(*, verbose: bool, stream: TextIO) -> None:
@@ -257,7 +269,11 @@ def _dispatch(
             exit_code = _cmd_mount(profile, stdout=stdout)
         case "unmount":
             profile = _resolve_from_args(config, config_dir, args)
-            exit_code = _cmd_unmount(profile, stdout=stdout)
+            exit_code = _cmd_unmount(
+                profile,
+                lazy=bool(args.lazy),
+                stdout=stdout,
+            )
         case "inspect":
             profile = _resolve_from_args(config, config_dir, args)
             exit_code = _cmd_inspect(
@@ -386,9 +402,14 @@ def _cmd_mount(profile: ResolvedProfile, *, stdout: TextIO) -> int:
     return _EXIT_OK
 
 
-def _cmd_unmount(profile: ResolvedProfile, *, stdout: TextIO) -> int:
+def _cmd_unmount(
+    profile: ResolvedProfile,
+    *,
+    lazy: bool,
+    stdout: TextIO,
+) -> int:
     backend = get_backend(profile.backend)
-    backend.unmount(profile)
+    backend.unmount(profile, lazy=lazy)
     stdout.write(
         f"Unmounted [{profile.backend.value}] {profile.runtime_dir / 'merged'}\n"
     )

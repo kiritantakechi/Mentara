@@ -41,7 +41,7 @@ _MERGED_DIRNAME = "merged"
 _EPHEMERAL_DIRNAME = "ephemeral"
 _UPPER_DIRNAME = "upper"
 _WORK_DIRNAME = "work"
-_UNMOUNT_ATTEMPTS = 5
+_UNMOUNT_ATTEMPTS = 20
 _UNMOUNT_RETRY_DELAY_SECONDS = 0.25
 _HASH_CHUNK_BYTES = 65_536
 
@@ -79,12 +79,15 @@ class OverlayBackend(Protocol):
         self,
         profile: ResolvedProfile,
         workspace: MountedWorkspace | None = None,
+        *,
+        lazy: bool = False,
     ) -> None:
         """Tear down an active virtual workspace for `profile`.
 
         Args:
             profile: Resolved launcher profile.
             workspace: Workspace returned by `mount`, if known.
+            lazy: Use lazy unmount (`fusermount3 -uz`) when supported.
         """
         ...
 
@@ -170,12 +173,15 @@ class FuseOverlayBackend:
         self,
         profile: ResolvedProfile,
         workspace: MountedWorkspace | None = None,
+        *,
+        lazy: bool = False,
     ) -> None:
         """Unmount the FUSE overlay and clean up ephemeral dirs.
 
         Args:
             profile: Resolved launcher profile.
             workspace: Workspace returned by `mount`, if available.
+            lazy: Pass `-uz` to detach immediately if busy.
 
         Raises:
             MountError: If `fusermount3`/`fusermount` fails or is
@@ -198,7 +204,8 @@ class FuseOverlayBackend:
             return
 
         unmount_bin = _find_unmount_tool()
-        command = (unmount_bin, "-u", str(merged_dir))
+        unmount_flag = "-uz" if lazy else "-u"
+        command = (unmount_bin, unmount_flag, str(merged_dir))
 
         for attempt in range(1, _UNMOUNT_ATTEMPTS + 1):
             result = subprocess.run(  # noqa: S603 - fixed fusermount binary
@@ -313,17 +320,21 @@ class SymlinkStagingBackend:
         self,
         profile: ResolvedProfile,
         workspace: MountedWorkspace | None = None,
+        *,
+        lazy: bool = False,
     ) -> None:
         """Sync changed writable files to state and remove staged tree.
 
         Args:
             profile: Resolved launcher profile.
             workspace: Workspace returned by `mount`, if available.
+            lazy: Accepted for backend symmetry; unused by symlink mode.
 
         Raises:
             OverlayError: If no active staged workspace exists or the
                 manifest is corrupt.
         """
+        _ = lazy
         merged_dir = (
             workspace.merged_dir if workspace is not None else _merged_dir_for(profile)
         )

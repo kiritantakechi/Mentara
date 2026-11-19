@@ -1,7 +1,6 @@
 """Configuration schema, TOML loading, and profile resolution."""
 
 import os
-import tempfile
 import tomllib
 from dataclasses import dataclass
 from enum import StrEnum
@@ -351,10 +350,13 @@ def _resolve_layers(
 
 
 def _default_runtime_root() -> Path:
-    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
-    if xdg_runtime is not None and xdg_runtime != "":
-        return (Path(xdg_runtime).expanduser() / "mentara").resolve()
-    return (Path(tempfile.gettempdir()) / f"mentara-{os.getuid()}").resolve()
+    # Keep mounts under $HOME instead of /run/user or /tmp so bwrap
+    # runtimes (umu-run / steamrt pressure-vessel) can bind them cleanly
+    # without colliding with /run/user/$UID sockets.
+    xdg_cache = os.environ.get("XDG_CACHE_HOME")
+    if xdg_cache is not None and xdg_cache != "":
+        return (Path(xdg_cache).expanduser() / "mentara" / "runtime").resolve()
+    return (Path.home() / ".cache" / "mentara" / "runtime").resolve()
 
 
 def _default_state_root() -> Path:

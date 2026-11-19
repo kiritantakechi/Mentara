@@ -43,6 +43,7 @@ def test_build_overlay_plan_resolves_priority_and_shadows(
 
     state.mkdir()
     (state / "RA2MO.ini").write_text("[Options]\nSpeed=5\n", encoding="utf-8")
+    (state / ".wh..wh..opq").write_text("", encoding="utf-8")
 
     plan = build_overlay_plan(
         (
@@ -67,6 +68,7 @@ def test_build_overlay_plan_resolves_priority_and_shadows(
     by_path = {entry.relative_path.as_posix(): entry for entry in plan.entries}
     assert "Mentara/secret.py" not in by_path
     assert ".gitkeep" not in by_path
+    assert ".wh..wh..opq" not in by_path
     assert Path("Mentara") not in plan.directories
 
     assert by_path["ra2.mix"].origin is EntryOrigin.BASE

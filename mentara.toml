@@ -20,9 +20,11 @@ exclude = ["Mentara", ".git", ".gitkeep"]
 copy_patterns = ["*.ini", "*.cfg", "*.log", "*.sav", "*.key"]
 
 # Optional explicit directories (must NOT overlap base_dir or layers).
-# Leave commented to use $XDG_RUNTIME_DIR/mentara and
-# $XDG_STATE_HOME/mentara (default: ~/.local/state/mentara).
-# runtime_dir = "/tmp/mentara-runtime"
+# Leave commented to use $XDG_CACHE_HOME/mentara/runtime (default:
+# ~/.cache/mentara/runtime) and $XDG_STATE_HOME/mentara (default:
+# ~/.local/state/mentara). Keeping runtime_dir under $HOME avoids
+# pressure-vessel / bwrap conflicts with /run/user/$UID and /tmp.
+# runtime_dir = "~/.cache/mentara/runtime"
 # state_dir = "~/.local/state/mentara"
 
 [runner]
@@ -43,13 +45,13 @@ WINEDLLOVERRIDES = "ddraw=n,b"
 # GAMEID = "umu-default"
 
 [profiles.default]
-description = "Mental Omega Client with base overlay layer"
-layers = ["overlays/base"]
+description = "Mental Omega Client with Phobos v0.5-alpha2 and base overlay"
+layers = ["overlays/phobos", "overlays/base"]
 persist_state = true
 
 [profiles.syringe]
-description = "Launch gamemd.exe directly via Syringe.exe (DLL/INI mod testing)"
-layers = ["overlays/base"]
+description = "Launch gamemd.exe via SyringeEx (Phobos v0.5-alpha2 + base overlay)"
+layers = ["overlays/phobos", "overlays/base"]
 persist_state = true
 
 [profiles.syringe.runner]

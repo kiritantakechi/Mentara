@@ -160,7 +160,32 @@ def test_doctor_checks_fuse_backend_tools(
 
     monkeypatch.setattr(
         "mentara.doctor.shutil.which",
-        lambda name: f"/usr/bin/{name}",
+        lambda name, **_kw: f"/usr/bin/{name}",
     )
     ready_report = run_doctor(profile)
     assert not ready_report.has_errors
+
+
+def test_doctor_warns_when_umu_runtime_dir_under_run_user(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_dir = tmp_path / "base"
+    _populate_base(base_dir)
+    config = MentaraConfig(
+        base_dir=str(base_dir),
+        runtime_dir="/run/user/1000/mentara",
+        state_dir=str(tmp_path / "state"),
+        backend=BackendKind.SYMLINK,
+        runner=RunnerConfig(command=("umu-run",)),
+    )
+    monkeypatch.setattr(
+        "mentara.doctor.shutil.which",
+        lambda name, **_kw: f"/usr/bin/{name}",
+    )
+    report = run_doctor(resolve_profile(config, config_dir=tmp_path))
+
+    assert any(
+        item.check == "runtime-dir" and item.severity is Severity.WARN
+        for item in report.diagnostics
+    )

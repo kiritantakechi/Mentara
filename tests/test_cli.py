@@ -156,3 +156,16 @@ def test_cli_inspect_text_and_doctor(tmp_path: Path) -> None:
     err = io.StringIO()
     assert main(["-c", str(config_path), "doctor"], stdout=out, stderr=err) == 0
     assert "Doctor report for profile 'default':" in out.getvalue()
+
+    # Subcommands also accept `-v` directly.
+    out = io.StringIO()
+    err = io.StringIO()
+    assert (
+        main(
+            ["-c", str(config_path), "launch", "--dry-run", "-v"],
+            stdout=out,
+            stderr=err,
+        )
+        == 0
+    )
+    assert "Command:" in out.getvalue()

@@ -85,6 +85,7 @@ def run_doctor(profile: ResolvedProfile) -> DoctorReport:
     _check_base_dir(profile, diagnostics)
     _check_layers(profile, diagnostics)
     _check_backend(profile, diagnostics)
+    _check_runtime_dir(profile, diagnostics)
     _check_runner(profile, diagnostics)
 
     try:
@@ -216,6 +217,32 @@ def _check_backend(
             f"fuse-overlayfs ready ({fuse_bin}, unmount via {unmount_bin}).",
         ),
     )
+
+
+def _check_runtime_dir(
+    profile: ResolvedProfile,
+    diagnostics: list[Diagnostic],
+) -> None:
+    if not profile.runner.command:
+        return
+    runner_name = Path(profile.runner.command[0]).name.casefold()
+    if "umu" not in runner_name and "proton" not in runner_name:
+        return
+
+    unsafe_roots = (Path("/run/user"), Path("/tmp"))  # noqa: S108 - diagnostic check
+    for root in unsafe_roots:
+        if profile.runtime_dir.is_relative_to(root):
+            diagnostics.append(
+                Diagnostic(
+                    "runtime-dir",
+                    Severity.WARN,
+                    f"runtime_dir ({profile.runtime_dir}) is under {root}, "
+                    "which collides with umu-run/pressure-vessel bwrap "
+                    "sandboxing; place runtime_dir under $HOME (e.g. "
+                    "~/.cache/mentara/runtime).",
+                ),
+            )
+            return
 
 
 def _check_runner(
