@@ -53,7 +53,8 @@ def test_cli_profiles_inspect_and_dry_run(tmp_path: Path) -> None:
     out = io.StringIO()
     err = io.StringIO()
     assert main(["-c", str(config_path), "profiles"], stdout=out, stderr=err) == 0
-    assert "* default [symlink]" in out.getvalue()
+    assert "* default [" in out.getvalue()
+    assert ":symlink]" in out.getvalue()
 
     out = io.StringIO()
     assert (
@@ -85,6 +86,7 @@ def test_cli_profiles_inspect_and_dry_run(tmp_path: Path) -> None:
         )
         == 0
     )
+    assert "Platform:" in out.getvalue()
     assert "Command:" in out.getvalue()
     assert "mock.py" in out.getvalue()
 
@@ -155,9 +157,8 @@ def test_cli_inspect_text_and_doctor(tmp_path: Path) -> None:
     out = io.StringIO()
     err = io.StringIO()
     assert main(["-c", str(config_path), "doctor"], stdout=out, stderr=err) == 0
-    assert "Doctor report for profile 'default':" in out.getvalue()
+    assert "Doctor report for profile 'default'" in out.getvalue()
 
-    # Subcommands also accept `-v` directly.
     out = io.StringIO()
     err = io.StringIO()
     assert (

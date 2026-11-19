@@ -12,6 +12,7 @@ lazy from collections.abc import Sequence
 from mentara.config import (
     BackendKind,
     MentaraConfig,
+    PlatformKind,
     ProfileOverrides,
     ResolvedProfile,
     find_config_path,
@@ -45,8 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mentara",
         description=(
-            "Virtual overlay launcher for Mental Omega keeping base game "
-            "files decoupled from custom INI/DLL layers."
+            "Cross-platform virtual overlay launcher for Mental Omega "
+            "decoupling base game files from custom INI/DLL layers."
         ),
     )
     parser.add_argument(
@@ -165,7 +166,7 @@ def main(
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> int:
-    """Run the Mentara CLI and return a POSIX exit code.
+    """Run the Mentara CLI and return a process exit code.
 
     Args:
         argv: Command-line arguments; defaults to `sys.argv[1:]`.
@@ -240,7 +241,7 @@ def _dispatch(
 
     match subcommand:
         case "profiles":
-            exit_code = _cmd_profiles(config, stdout=stdout)
+            exit_code = _cmd_profiles(config, config_dir=config_dir, stdout=stdout)
         case "init-layer":
             exit_code = _cmd_init_layer(
                 name=str(args.name),
@@ -311,20 +312,29 @@ def _strip_leading_dash_dash(args: tuple[str, ...]) -> tuple[str, ...]:
     return args
 
 
-def _cmd_profiles(config: MentaraConfig, *, stdout: TextIO) -> int:
+def _cmd_profiles(
+    config: MentaraConfig,
+    *,
+    config_dir: Path,
+    stdout: TextIO,
+) -> int:
+    platform = PlatformKind.current()
     lines: list[str] = []
     for name in sorted(config.profiles):
-        prof = config.profiles[name]
-        marker = "*" if name == config.default_profile else " "
-        backend = (prof.backend or config.backend).value
-        exe = (
-            prof.runner.executable
-            if prof.runner is not None and prof.runner.executable is not None
-            else config.runner.executable
+        resolved = resolve_profile(
+            config,
+            config_dir=config_dir,
+            profile_name=name,
+            platform=platform,
         )
-        layers = ", ".join(prof.layers) if prof.layers else "(vanilla)"
-        desc = f" — {prof.description}" if prof.description else ""
-        lines.append(f"{marker} {name} [{backend}] exe={exe} layers=[{layers}]{desc}\n")
+        raw_profile = config.profiles[name]
+        marker = "*" if name == config.default_profile else " "
+        layers = ", ".join(raw_profile.layers) if raw_profile.layers else "(vanilla)"
+        desc = f" — {resolved.description}" if resolved.description else ""
+        lines.append(
+            f"{marker} {name} [{resolved.platform.value}:{resolved.backend.value}] "
+            f"exe={resolved.runner.executable} layers=[{layers}]{desc}\n"
+        )
     stdout.write("".join(lines))
     return _EXIT_OK
 
@@ -375,6 +385,7 @@ def _cmd_launch(
         persist_label = "yes" if profile.persist_state else "no"
         summary = [
             f"Profile:    {profile.name}",
+            f"Platform:   {profile.platform.value}",
             f"Backend:    {profile.backend.value}",
             f"Base dir:   {profile.base_dir}",
             f"Merged dir: {preview_workspace.merged_dir}",
@@ -436,6 +447,7 @@ def _cmd_inspect(
     if as_json:
         payload = {
             "profile": profile.name,
+            "platform": profile.platform.value,
             "backend": profile.backend.value,
             "base_dir": str(profile.base_dir),
             "layers": [str(layer) for layer in profile.layers],
@@ -466,7 +478,7 @@ def _cmd_inspect(
         return _EXIT_OK
 
     lines = [
-        f"Profile: {profile.name} ({profile.backend.value})",
+        f"Profile: {profile.name} ({profile.platform.value}:{profile.backend.value})",
         f"Files:   {len(selected)} shown / {len(plan.entries)} total",
     ]
     for entry in selected:
@@ -497,7 +509,10 @@ def _cmd_doctor(
     stderr: TextIO,
 ) -> int:
     report = run_doctor(profile)
-    lines = [f"Doctor report for profile '{report.profile_name}':"]
+    header = (
+        f"Doctor report for profile '{report.profile_name}' ({profile.platform.value}):"
+    )
+    lines = [header]
     for item in report.diagnostics:
         tag = item.severity.value.upper()
         lines.append(f"  [{tag:5}] {item.check}: {item.message}")

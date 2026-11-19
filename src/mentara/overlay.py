@@ -1,9 +1,8 @@
-"""Virtual workspace mounting, symlink staging, and teardown."""
+"""Virtual workspace mounting, staging, and teardown across OSes."""
 
 import hashlib
 import json
 import logging
-import os
 import shutil
 import subprocess
 import tempfile
@@ -14,7 +13,7 @@ from pathlib import Path
 from typing import Protocol
 lazy from collections.abc import Generator, Mapping
 
-from mentara.config import BackendKind, ResolvedProfile
+from mentara.config import BackendKind, PlatformKind, ResolvedProfile
 from mentara.errors import MountError, OverlayError
 from mentara.planner import (
     EntryOrigin,
@@ -43,7 +42,6 @@ _UPPER_DIRNAME = "upper"
 _WORK_DIRNAME = "work"
 _UNMOUNT_ATTEMPTS = 20
 _UNMOUNT_RETRY_DELAY_SECONDS = 0.25
-_HASH_CHUNK_BYTES = 65_536
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,10 +116,17 @@ class FuseOverlayBackend:
             A `MountedWorkspace` pointing at the mounted `merged` dir.
 
         Raises:
-            MountError: If FUSE binaries are missing or mounting fails.
+            MountError: If the host platform is not Linux, FUSE tools
+                are missing, or mounting fails.
             OverlayError: If source directories are missing or target is
                 busy or non-empty.
         """
+        if profile.platform is not PlatformKind.LINUX:
+            raise MountError.unsupported_platform(
+                self.kind.value,
+                profile.platform.value,
+            )
+
         _validate_source_directories(profile)
         fuse_bin = _require_tool("fuse-overlayfs")
         merged_dir = _merged_dir_for(profile)
@@ -188,6 +193,12 @@ class FuseOverlayBackend:
                 absent.
             OverlayError: If no mount is active when called directly.
         """
+        if profile.platform is not PlatformKind.LINUX:
+            raise MountError.unsupported_platform(
+                self.kind.value,
+                profile.platform.value,
+            )
+
         merged_dir = (
             workspace.merged_dir if workspace is not None else _merged_dir_for(profile)
         )
@@ -246,12 +257,16 @@ class FuseOverlayBackend:
 
 
 class SymlinkStagingBackend:
-    """Shadow directory tree using symlinks and isolated copies."""
+    """Cross-platform shadow tree using links and isolated copies."""
 
     kind: BackendKind = BackendKind.SYMLINK
 
     def mount(self, profile: ResolvedProfile) -> MountedWorkspace:
         """Build a staged virtual directory tree for `profile`.
+
+        Read-only assets are symlinked (falling back to hardlinks on
+        Windows when unprivileged), while files matching `copy_patterns`
+        are copied so runtime edits never mutate `base_dir` or layers.
 
         Args:
             profile: Resolved launcher profile.
@@ -276,7 +291,7 @@ class SymlinkStagingBackend:
             profile.state_dir / _UPPER_DIRNAME if profile.persist_state else None
         )
         copied_hashes: dict[str, str] = {}
-        symlinked_files: list[str] = []
+        linked_files: list[str] = []
 
         try:
             for rel_dir in plan.directories:
@@ -290,8 +305,8 @@ class SymlinkStagingBackend:
                     shutil.copy2(entry.source_path, target)
                     copied_hashes[rel_posix] = _sha256_file(target)
                 else:
-                    target.symlink_to(entry.source_path)
-                    symlinked_files.append(rel_posix)
+                    _link_readonly(entry.source_path, target)
+                    linked_files.append(rel_posix)
 
             manifest_payload: dict[str, object] = {
                 "profile_name": profile.name,
@@ -299,7 +314,7 @@ class SymlinkStagingBackend:
                 "persist_state": profile.persist_state,
                 "upper_dir": str(upper_dir) if upper_dir is not None else None,
                 "copied_hashes": copied_hashes,
-                "symlinked_files": symlinked_files,
+                "linked_files": linked_files,
             }
             _write_json_atomic(manifest_path, manifest_payload)
         except Exception:
@@ -352,6 +367,7 @@ class SymlinkStagingBackend:
                 merged_dir=merged_dir,
                 upper_dir=manifest.upper_dir,
                 copied_hashes=manifest.copied_hashes,
+                linked_files=manifest.linked_files,
             )
 
         if merged_dir.exists():
@@ -480,6 +496,7 @@ class _StagingManifest:
     persist_state: bool
     upper_dir: Path | None
     copied_hashes: frozendict[str, str]
+    linked_files: frozenset[str]
 
 
 def _merged_dir_for(profile: ResolvedProfile) -> Path:
@@ -566,12 +583,18 @@ def _is_mountpoint(path: Path) -> bool:
     return path.exists() and path.is_mount()
 
 
+def _link_readonly(source: Path, target: Path) -> None:
+    try:
+        target.symlink_to(source)
+    except OSError:
+        # Unprivileged Windows accounts without Developer Mode cannot
+        # create symbolic links; fall back to a same-volume hardlink.
+        target.hardlink_to(source)
+
+
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        while chunk := handle.read(_HASH_CHUNK_BYTES):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, object]) -> None:
@@ -607,7 +630,12 @@ def _read_staging_manifest(path: Path) -> _StagingManifest:
     persist_state = raw.get("persist_state")
     upper_raw = raw.get("upper_dir")
     copied_raw = raw.get("copied_hashes")
-    if not isinstance(persist_state, bool) or not isinstance(copied_raw, dict):
+    linked_raw = raw.get("linked_files", [])
+    if (
+        not isinstance(persist_state, bool)
+        or not isinstance(copied_raw, dict)
+        or not isinstance(linked_raw, list)
+    ):
         raise OverlayError.invalid_manifest_schema(path)
     if upper_raw is not None and not isinstance(upper_raw, str):
         raise OverlayError.invalid_manifest_schema(path)
@@ -618,10 +646,17 @@ def _read_staging_manifest(path: Path) -> _StagingManifest:
             raise OverlayError.invalid_manifest_schema(path)
         copied_hashes[key] = value
 
+    linked_files: set[str] = set()
+    for item in linked_raw:
+        if not isinstance(item, str):
+            raise OverlayError.invalid_manifest_schema(path)
+        linked_files.add(item)
+
     return _StagingManifest(
         persist_state=persist_state,
         upper_dir=Path(upper_raw) if upper_raw is not None else None,
         copied_hashes=frozendict(copied_hashes),
+        linked_files=frozenset(linked_files),
     )
 
 
@@ -630,12 +665,12 @@ def _sync_staged_changes(
     merged_dir: Path,
     upper_dir: Path,
     copied_hashes: frozendict[str, str],
+    linked_files: frozenset[str],
 ) -> None:
     if not merged_dir.is_dir():
         return
 
-    for dirpath, _dirnames, filenames in os.walk(merged_dir):
-        current_dir = Path(dirpath)
+    for current_dir, _dirnames, filenames in merged_dir.walk():
         rel_dir = current_dir.relative_to(merged_dir)
         for filename in filenames:
             full_path = current_dir / filename
@@ -644,6 +679,9 @@ def _sync_staged_changes(
 
             rel_path = Path(filename) if rel_dir == Path() else rel_dir / filename
             rel_posix = rel_path.as_posix()
+            if rel_posix in linked_files and full_path.stat().st_nlink > 1:
+                continue
+
             recorded_hash = copied_hashes.get(rel_posix)
             if recorded_hash is not None and _sha256_file(full_path) == recorded_hash:
                 continue

@@ -1,4 +1,4 @@
-"""Environment and Mental Omega overlay diagnostics."""
+"""Cross-platform environment and Mental Omega overlay diagnostics."""
 
 import os
 import shutil
@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from mentara.config import BackendKind, ResolvedProfile
+from mentara.config import BackendKind, PlatformKind, ResolvedProfile
 from mentara.errors import OverlayError
 from mentara.overlay import plan_profile
 from mentara.planner import EntryOrigin, OverlayPlan
+from mentara.runner import extract_command_binaries
 
 __all__ = [
     "Diagnostic",
@@ -85,7 +86,6 @@ def run_doctor(profile: ResolvedProfile) -> DoctorReport:
     _check_base_dir(profile, diagnostics)
     _check_layers(profile, diagnostics)
     _check_backend(profile, diagnostics)
-    _check_runtime_dir(profile, diagnostics)
     _check_runner(profile, diagnostics)
 
     try:
@@ -101,6 +101,7 @@ def run_doctor(profile: ResolvedProfile) -> DoctorReport:
     _check_target_executable(profile, plan, diagnostics)
     _check_case_collisions(plan, diagnostics)
     _check_forbidden_files(profile, plan, diagnostics)
+    _check_syringeex_client_defs(profile, plan, diagnostics)
 
     return DoctorReport(
         profile_name=profile.name,
@@ -172,7 +173,18 @@ def _check_backend(
             Diagnostic(
                 "backend",
                 Severity.OK,
-                "Using symlink staging backend (no FUSE required).",
+                "Using symlink/hardlink staging backend (cross-platform).",
+            ),
+        )
+        return
+
+    if profile.platform is not PlatformKind.LINUX:
+        diagnostics.append(
+            Diagnostic(
+                "backend",
+                Severity.ERROR,
+                f"Backend {profile.backend.value!r} requires Linux FUSE; "
+                f"use backend = 'symlink' on {profile.platform.value}.",
             ),
         )
         return
@@ -219,69 +231,49 @@ def _check_backend(
     )
 
 
-def _check_runtime_dir(
-    profile: ResolvedProfile,
-    diagnostics: list[Diagnostic],
-) -> None:
-    if not profile.runner.command:
-        return
-    runner_name = Path(profile.runner.command[0]).name.casefold()
-    if "umu" not in runner_name and "proton" not in runner_name:
-        return
-
-    unsafe_roots = (Path("/run/user"), Path("/tmp"))  # noqa: S108 - diagnostic check
-    for root in unsafe_roots:
-        if profile.runtime_dir.is_relative_to(root):
-            diagnostics.append(
-                Diagnostic(
-                    "runtime-dir",
-                    Severity.WARN,
-                    f"runtime_dir ({profile.runtime_dir}) is under {root}, "
-                    "which collides with umu-run/pressure-vessel bwrap "
-                    "sandboxing; place runtime_dir under $HOME (e.g. "
-                    "~/.cache/mentara/runtime).",
-                ),
-            )
-            return
-
-
 def _check_runner(
     profile: ResolvedProfile,
     diagnostics: list[Diagnostic],
 ) -> None:
-    if not profile.runner.command:
+    binaries = extract_command_binaries(profile.runner.command)
+    if not binaries:
         diagnostics.append(
             Diagnostic(
                 "runner",
                 Severity.OK,
-                "Direct execution configured (empty runner.command).",
+                "Direct native execution configured.",
             ),
         )
         return
 
-    program = profile.runner.command[0]
     path_env = profile.runner.env.get("PATH") or os.environ.get("PATH")
-    resolved = (
-        program
-        if "/" in program and Path(program).exists()
-        else shutil.which(program, path=path_env)
+    resolved_bins: list[str] = []
+    for program in binaries:
+        is_path = "/" in program or "\\" in program or Path(program).drive != ""
+        resolved = (
+            program
+            if is_path and Path(program).exists()
+            else shutil.which(program, path=path_env)
+        )
+        if resolved is None:
+            diagnostics.append(
+                Diagnostic(
+                    "runner",
+                    Severity.ERROR,
+                    f"Runner executable not found: {program}",
+                ),
+            )
+            return
+        resolved_bins.append(resolved)
+
+    chain = " -> ".join(resolved_bins)
+    diagnostics.append(
+        Diagnostic(
+            "runner",
+            Severity.OK,
+            f"Runner chain ready: {chain}",
+        ),
     )
-    if resolved is None:
-        diagnostics.append(
-            Diagnostic(
-                "runner",
-                Severity.ERROR,
-                f"Runner executable not found: {program}",
-            ),
-        )
-    else:
-        diagnostics.append(
-            Diagnostic(
-                "runner",
-                Severity.OK,
-                f"Runner executable ready: {resolved}",
-            ),
-        )
 
 
 def _check_core_files(
@@ -398,17 +390,83 @@ def _check_forbidden_files(
         )
 
 
+def _check_syringeex_client_defs(
+    profile: ResolvedProfile,
+    plan: OverlayPlan,
+    diagnostics: list[Diagnostic],
+) -> None:
+    if Path(profile.runner.executable).name.casefold() != _CLIENT_EXE_FOLDED:
+        return
+
+    syringe = plan.lookup_case_insensitive(Path("Syringe.exe"))
+    client_defs = plan.lookup_case_insensitive(_CLIENT_DEFINITIONS_PATH)
+    if syringe is None or client_defs is None:
+        return
+    if not _is_syringeex_binary(syringe.source_path):
+        return
+
+    parser = _parse_ini(client_defs.source_path)
+    if parser is None:
+        return
+
+    launcher_exe = parser.get(
+        "Settings",
+        "GameLauncherExecutableName",
+        fallback="",
+    ).strip()
+    extra_params = parser.get(
+        "Settings",
+        "ExtraCommandLineParams",
+        fallback="",
+    )
+    if launcher_exe or "--args=" not in extra_params:
+        diagnostics.append(
+            Diagnostic(
+                "syringeex-client-defs",
+                Severity.WARN,
+                "SyringeEx detected, but Resources/ClientDefinitions.ini "
+                "still uses legacy Syringe syntax. Set "
+                "GameExecutableNames=Syringe.exe, clear "
+                "GameLauncherExecutableName, and wrap -SPAWN in "
+                'ExtraCommandLineParams=gamemd.exe --args="-SPAWN ...".',
+            ),
+        )
+        return
+
+    diagnostics.append(
+        Diagnostic(
+            "syringeex-client-defs",
+            Severity.OK,
+            "Resources/ClientDefinitions.ini is migrated for SyringeEx.",
+        ),
+    )
+
+
+def _is_syringeex_binary(path: Path) -> bool:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    return b"SyringeEx" in data
+
+
 def _read_forbidden_files(path: Path) -> frozenset[str]:
+    parser = _parse_ini(path)
+    if parser is None:
+        return frozenset()
+    raw = parser.get("Settings", "ForbiddenFiles", fallback="")
+    return frozenset(item.strip().casefold() for item in raw.split(",") if item.strip())
+
+
+def _parse_ini(path: Path) -> ConfigParser | None:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return frozenset()
+        return None
 
     parser = ConfigParser(interpolation=None, strict=False)
     try:
         parser.read_string(text)
     except ConfigParserError:
-        return frozenset()
-
-    raw = parser.get("Settings", "ForbiddenFiles", fallback="")
-    return frozenset(item.strip().casefold() for item in raw.split(",") if item.strip())
+        return None
+    return parser

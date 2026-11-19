@@ -1,13 +1,14 @@
-"""Tests for symlink staging and fuse-overlayfs virtual backends."""
+"""Tests for symlink/hardlink staging and fuse-overlayfs backends."""
 
 import subprocess
-lazy from pathlib import Path
+from pathlib import Path
 
 import pytest
 
 from mentara.config import (
     BackendKind,
     MentaraConfig,
+    PlatformKind,
     ProfileConfig,
     ResolvedProfile,
     resolve_profile,
@@ -24,6 +25,7 @@ def _make_profile(
     tmp_path: Path,
     *,
     backend: BackendKind,
+    platform: PlatformKind = PlatformKind.LINUX,
     persist_state: bool = True,
 ) -> ResolvedProfile:
     base_dir = tmp_path / "Mental Omega"
@@ -56,7 +58,7 @@ def _make_profile(
         },
         default_profile="test",
     )
-    return resolve_profile(config, config_dir=tmp_path)
+    return resolve_profile(config, config_dir=tmp_path, platform=platform)
 
 
 def test_symlink_backend_decouples_writes_and_persists_state(
@@ -106,6 +108,38 @@ def test_symlink_backend_decouples_writes_and_persists_state(
         ).read_bytes() == b"hotpatched-dll"
     finally:
         backend.unmount(profile, workspace_two)
+
+
+def test_symlink_backend_windows_hardlink_fallback_skips_untouched_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _make_profile(
+        tmp_path,
+        backend=BackendKind.SYMLINK,
+        platform=PlatformKind.WINDOWS,
+    )
+    backend = SymlinkStagingBackend()
+
+    def _deny_symlink(_self: Path, _target: Path) -> None:
+        msg = "WinError 1314: symlink privilege not held"
+        raise OSError(msg)
+
+    monkeypatch.setattr(Path, "symlink_to", _deny_symlink)
+
+    workspace = backend.mount(profile)
+    merged = workspace.merged_dir
+    assert not (merged / "ra2.mix").is_symlink()
+    assert (merged / "ra2.mix").stat().st_nlink > 1
+
+    (merged / "RA2MO.ini").write_text("Speed=9\n", encoding="utf-8")
+    backend.unmount(profile, workspace)
+
+    # Hardlinked read-only assets must NOT be copied into state/upper.
+    upper = profile.state_dir / "upper"
+    assert (upper / "RA2MO.ini").read_text(encoding="utf-8") == "Speed=9\n"
+    assert not (upper / "ra2.mix").exists()
+    assert not (upper / "Ares.dll").exists()
 
 
 def test_symlink_backend_ephemeral_discards_writes(tmp_path: Path) -> None:
@@ -165,6 +199,18 @@ def test_symlink_backend_rejects_already_active_and_non_empty(
         backend.unmount(profile)
 
 
+def test_fuse_backend_rejects_windows_platform(tmp_path: Path) -> None:
+    profile = _make_profile(
+        tmp_path,
+        backend=BackendKind.FUSE_OVERLAYFS,
+        platform=PlatformKind.WINDOWS,
+    )
+    backend = FuseOverlayBackend()
+
+    with pytest.raises(MountError, match="not supported on platform 'windows'"):
+        backend.mount(profile)
+
+
 def test_fuse_backend_builds_reversed_lowerdir_and_unmounts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -187,7 +233,6 @@ def test_fuse_backend_builds_reversed_lowerdir_and_unmounts(
             mounted = True
             return subprocess.CompletedProcess(command, 0, "", "")
         if len(calls) == 2:
-            # First unmount attempt reports busy; second succeeds.
             return subprocess.CompletedProcess(command, 1, "", "Device busy")
         mounted = False
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -212,7 +257,6 @@ def test_fuse_backend_builds_reversed_lowerdir_and_unmounts(
     assert not backend.is_mounted(profile)
     assert len(calls) == 3
 
-    # Lazy unmount passes `-uz` to fusermount3.
     mounted = True
     backend.unmount(profile, workspace, lazy=True)
     assert calls[-1][1] == "-uz"

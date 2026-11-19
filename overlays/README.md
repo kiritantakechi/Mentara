@@ -8,7 +8,9 @@ the original Mental Omega game directory.
 - `overlays/phobos/`: Upstream **Phobos `v0.5-alpha2`** (`Phobos.dll`,
   bundled `Syringe.exe` / SyringeEx `0.1.0.2`, `gamemd.edb`,
   `Syringe.LICENSE.txt`, and `Phobos.pdb` which is excluded from Git via
-  `*.pdb` in `.gitignore`).
+  `*.pdb` in `.gitignore`), plus `Resources/ClientDefinitions.ini` migrated
+  to SyringeEx's `--args="..."` launch syntax so `MentalOmegaClient.exe`
+  forwards `-SPAWN` to `gamemd.exe`.
   - Source: https://github.com/Phobos-developers/Phobos/releases/tag/v0.5-alpha2
   - Stacked *below* `overlays/base` so local overrides in `overlays/base`
     always take precedence.

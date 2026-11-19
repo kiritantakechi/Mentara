@@ -1,4 +1,4 @@
-"""Configuration schema, TOML loading, and profile resolution."""
+"""Configuration schema, TOML loading, and cross-platform resolution."""
 
 import os
 import tomllib
@@ -23,6 +23,9 @@ __all__ = [
     "DEFAULT_EXCLUDE",
     "BackendKind",
     "MentaraConfig",
+    "PlatformConfig",
+    "PlatformKind",
+    "PlatformOverrideConfig",
     "ProfileConfig",
     "ProfileOverrides",
     "ResolvedProfile",
@@ -45,6 +48,22 @@ DEFAULT_COPY_PATTERNS: tuple[str, ...] = (
 )
 
 
+class PlatformKind(StrEnum):
+    """Supported host operating system families."""
+
+    LINUX = "linux"
+    WINDOWS = "windows"
+
+    @classmethod
+    def current(cls) -> PlatformKind:
+        """Detect the active host platform family.
+
+        Returns:
+            `PlatformKind.WINDOWS` on Windows NT, otherwise `LINUX`.
+        """
+        return cls.WINDOWS if os.name.startswith("nt") else cls.LINUX
+
+
 class BackendKind(StrEnum):
     """Supported virtual workspace materialisation backends."""
 
@@ -57,7 +76,7 @@ class RunnerConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    command: tuple[str, ...] = ("umu-run",)
+    command: tuple[str, ...] = ()
     executable: str = "MentalOmegaClient.exe"
     args: tuple[str, ...] = ()
     env: dict[str, str] = Field(default_factory=dict)
@@ -71,7 +90,7 @@ class RunnerConfig(BaseModel):
 
 
 class RunnerOverrideConfig(BaseModel):
-    """Per-profile overrides applied on top of global `RunnerConfig`."""
+    """Partial overrides applied on top of a base `RunnerConfig`."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -83,9 +102,29 @@ class RunnerOverrideConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_executable(self) -> Self:
         if self.executable is not None and not self.executable.strip():
-            msg = "profile runner.executable must not be empty"
+            msg = "runner.executable override must not be empty"
             raise ValueError(msg)
         return self
+
+
+class PlatformConfig(BaseModel):
+    """Host-platform defaults for backend, storage roots, and runner."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: BackendKind
+    runtime_dir: str | None = None
+    state_dir: str | None = None
+    runner: RunnerConfig = Field(default_factory=RunnerConfig)
+
+
+class PlatformOverrideConfig(BaseModel):
+    """Per-profile, per-platform overrides for backend and runner."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: BackendKind | None = None
+    runner: RunnerOverrideConfig | None = None
 
 
 class ProfileConfig(BaseModel):
@@ -99,10 +138,50 @@ class ProfileConfig(BaseModel):
     persist_state: bool = True
     copy_patterns: tuple[str, ...] | None = None
     runner: RunnerOverrideConfig | None = None
+    linux: PlatformOverrideConfig | None = None
+    windows: PlatformOverrideConfig | None = None
+
+    def platform_override(
+        self,
+        platform: PlatformKind,
+    ) -> PlatformOverrideConfig | None:
+        """Return the platform-specific override section for `platform`.
+
+        Args:
+            platform: Target host platform.
+
+        Returns:
+            Matching `PlatformOverrideConfig`, or `None`.
+        """
+        match platform:
+            case PlatformKind.LINUX:
+                return self.linux
+            case PlatformKind.WINDOWS:
+                return self.windows
+
+
+def _default_linux_platform() -> PlatformConfig:
+    return PlatformConfig(
+        backend=BackendKind.FUSE_OVERLAYFS,
+        runner=RunnerConfig(
+            command=("umu-run",),
+            executable="MentalOmegaClient.exe",
+        ),
+    )
+
+
+def _default_windows_platform() -> PlatformConfig:
+    return PlatformConfig(
+        backend=BackendKind.SYMLINK,
+        runner=RunnerConfig(
+            command=(),
+            executable="MentalOmegaClient.exe",
+        ),
+    )
 
 
 class MentaraConfig(BaseModel):
-    """Top-level `mentara.toml` schema."""
+    """Top-level `mentara.toml` schema supporting Linux and Windows."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -110,13 +189,30 @@ class MentaraConfig(BaseModel):
     runtime_dir: str | None = None
     state_dir: str | None = None
     default_profile: str = "default"
-    backend: BackendKind = BackendKind.FUSE_OVERLAYFS
+    backend: BackendKind | None = None
     exclude: tuple[str, ...] = DEFAULT_EXCLUDE
     copy_patterns: tuple[str, ...] = DEFAULT_COPY_PATTERNS
-    runner: RunnerConfig = Field(default_factory=RunnerConfig)
+    runner: RunnerOverrideConfig | None = None
+    linux: PlatformConfig = Field(default_factory=_default_linux_platform)
+    windows: PlatformConfig = Field(default_factory=_default_windows_platform)
     profiles: dict[str, ProfileConfig] = Field(
         default_factory=lambda: {"default": ProfileConfig()},
     )
+
+    def platform_config(self, platform: PlatformKind) -> PlatformConfig:
+        """Return the base configuration table for `platform`.
+
+        Args:
+            platform: Target host platform.
+
+        Returns:
+            The `linux` or `windows` `PlatformConfig`.
+        """
+        match platform:
+            case PlatformKind.LINUX:
+                return self.linux
+            case PlatformKind.WINDOWS:
+                return self.windows
 
     @model_validator(mode="after")
     def _validate_profiles(self) -> Self:
@@ -159,6 +255,7 @@ class ResolvedProfile:
 
     name: str
     description: str
+    platform: PlatformKind
     config_dir: Path
     base_dir: Path
     layers: tuple[Path, ...]
@@ -238,14 +335,16 @@ def resolve_profile(
     *,
     config_dir: Path,
     profile_name: str | None = None,
+    platform: PlatformKind | None = None,
     overrides: ProfileOverrides | None = None,
 ) -> ResolvedProfile:
-    """Resolve a named profile into concrete, validated paths.
+    """Resolve a profile into concrete paths for a target platform.
 
     Args:
         config: Validated top-level configuration.
         config_dir: Directory containing `mentara.toml`.
         profile_name: Profile name; defaults to `default_profile`.
+        platform: Host platform; defaults to `PlatformKind.current()`.
         overrides: Optional CLI overrides for backend or runner.
 
     Returns:
@@ -259,7 +358,11 @@ def resolve_profile(
     if profile is None:
         raise ConfigError.unknown_profile(chosen_name, tuple(config.profiles))
 
+    active_platform = PlatformKind.current() if platform is None else platform
+    plat_cfg = config.platform_config(active_platform)
+    plat_prof_override = profile.platform_override(active_platform)
     applied = ProfileOverrides() if overrides is None else overrides
+
     resolved_config_dir = config_dir.expanduser().resolve()
     base_dir = _resolve_path(config.base_dir, anchor=resolved_config_dir)
     layers = _resolve_layers(
@@ -268,15 +371,17 @@ def resolve_profile(
         base_dir=base_dir,
     )
 
+    raw_runtime = plat_cfg.runtime_dir or config.runtime_dir
+    raw_state = plat_cfg.state_dir or config.state_dir
     runtime_root = (
-        _resolve_path(config.runtime_dir, anchor=resolved_config_dir)
-        if config.runtime_dir is not None and config.runtime_dir != ""
-        else _default_runtime_root()
+        _resolve_path(raw_runtime, anchor=resolved_config_dir)
+        if raw_runtime is not None and raw_runtime != ""
+        else _default_runtime_root(active_platform)
     )
     state_root = (
-        _resolve_path(config.state_dir, anchor=resolved_config_dir)
-        if config.state_dir is not None and config.state_dir != ""
-        else _default_state_root()
+        _resolve_path(raw_state, anchor=resolved_config_dir)
+        if raw_state is not None and raw_state != ""
+        else _default_state_root(active_platform)
     )
     runtime_dir = runtime_root / chosen_name
     state_dir = state_root / chosen_name
@@ -288,13 +393,23 @@ def resolve_profile(
         layers=layers,
     )
 
-    runner = _merge_runner(
-        base=config.runner,
-        override=profile.runner,
+    runner = _merge_runner_chain(
+        base=plat_cfg.runner,
+        overrides=(
+            config.runner,
+            profile.runner,
+            plat_prof_override.runner if plat_prof_override is not None else None,
+        ),
         executable_override=applied.executable,
         extra_args=applied.extra_args,
     )
-    backend = applied.backend or profile.backend or config.backend
+    backend = (
+        applied.backend
+        or (plat_prof_override.backend if plat_prof_override is not None else None)
+        or profile.backend
+        or config.backend
+        or plat_cfg.backend
+    )
     copy_patterns = (
         profile.copy_patterns
         if profile.copy_patterns is not None
@@ -304,6 +419,7 @@ def resolve_profile(
     return ResolvedProfile(
         name=chosen_name,
         description=profile.description,
+        platform=active_platform,
         config_dir=resolved_config_dir,
         base_dir=base_dir,
         layers=layers,
@@ -349,21 +465,33 @@ def _resolve_layers(
     return tuple(resolved)
 
 
-def _default_runtime_root() -> Path:
-    # Keep mounts under $HOME instead of /run/user or /tmp so bwrap
-    # runtimes (umu-run / steamrt pressure-vessel) can bind them cleanly
-    # without colliding with /run/user/$UID sockets.
-    xdg_cache = os.environ.get("XDG_CACHE_HOME")
-    if xdg_cache is not None and xdg_cache != "":
-        return (Path(xdg_cache).expanduser() / "mentara" / "runtime").resolve()
-    return (Path.home() / ".cache" / "mentara" / "runtime").resolve()
+def _windows_app_data_root() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data is not None and local_app_data != "":
+        return (Path(local_app_data).expanduser() / "mentara").resolve()
+    return (Path.home() / "AppData" / "Local" / "mentara").resolve()
 
 
-def _default_state_root() -> Path:
-    xdg_state = os.environ.get("XDG_STATE_HOME")
-    if xdg_state is not None and xdg_state != "":
-        return (Path(xdg_state).expanduser() / "mentara").resolve()
-    return (Path.home() / ".local" / "state" / "mentara").resolve()
+def _default_runtime_root(platform: PlatformKind) -> Path:
+    match platform:
+        case PlatformKind.WINDOWS:
+            return _windows_app_data_root() / "runtime"
+        case PlatformKind.LINUX:
+            xdg_cache = os.environ.get("XDG_CACHE_HOME")
+            if xdg_cache is not None and xdg_cache != "":
+                return (Path(xdg_cache).expanduser() / "mentara" / "runtime").resolve()
+            return (Path.home() / ".cache" / "mentara" / "runtime").resolve()
+
+
+def _default_state_root(platform: PlatformKind) -> Path:
+    match platform:
+        case PlatformKind.WINDOWS:
+            return _windows_app_data_root() / "state"
+        case PlatformKind.LINUX:
+            xdg_state = os.environ.get("XDG_STATE_HOME")
+            if xdg_state is not None and xdg_state != "":
+                return (Path(xdg_state).expanduser() / "mentara").resolve()
+            return (Path.home() / ".local" / "state" / "mentara").resolve()
 
 
 def _ensure_disjoint_workspace(
@@ -404,10 +532,10 @@ def _paths_overlap(first: Path, second: Path) -> bool:
     return first.is_relative_to(second) or second.is_relative_to(first)
 
 
-def _merge_runner(
+def _merge_runner_chain(
     *,
     base: RunnerConfig,
-    override: RunnerOverrideConfig | None,
+    overrides: tuple[RunnerOverrideConfig | None, ...],
     executable_override: str | None,
     extra_args: tuple[str, ...],
 ) -> ResolvedRunner:
@@ -416,7 +544,9 @@ def _merge_runner(
     args = base.args
     merged_env = dict(base.env)
 
-    if override is not None:
+    for override in overrides:
+        if override is None:
+            continue
         if override.command is not None:
             command = override.command
         if override.executable is not None:

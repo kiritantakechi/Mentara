@@ -1,73 +1,57 @@
 # Mentara
 
-Mental Omega 虚拟叠层启动器，基于 `just`、`uv` 与 Python 3.15 工具链构建。
+跨平台（Linux & Windows 对等架构）Mental Omega 虚拟叠层启动器，基于 `just`、`uv` 与 Python 3.15 工具链构建。
 
-Mentara 在启动游戏时自动维护一个与原版游戏目录解耦的虚拟工作目录，将只读的原游戏目录、多个有序自定义叠层（INI、DLL、资源包等）与独立的可写状态层合成为统一视图，从而做到：
+Mentara 在启动游戏时自动维护一个与原版游戏目录解耦的虚拟工作目录，将只读的原游戏目录、多个有序自定义叠层（INI、DLL、资源包等）与独立的可写状态层合成为统一视图：
 
 - **原文件零污染**：游戏本体目录与自定义叠层目录均保持只读干净状态。
 - **INI / DLL 透明读取**：`MentalOmegaClient.exe`、`Syringe.exe`、`gamemd.exe` 以及 Ares/Phobos 等 DLL 在虚拟目录中按叠层优先级无缝读取。
-- **双虚拟目录后端**：
-  - `fuse-overlayfs`（默认）：基于 Linux FUSE 的零复制联合挂载，对 Wine / Proton / `umu-run` 与 DLL 加载器最透明，退出自动卸载。
-  - `symlink`：不依赖 FUSE 的影子目录树，大体积 `.mix` 使用符号链接、可写 `.ini`/`.cfg`/存档自动隔离复制，并在卸载时将变更回写到独立状态层。
-- **通用可配置 Runner**：支持 `umu-run` / Proton、`wine` 或任意自定义启动命令、环境变量（`WINEPREFIX`、`PROTONPATH`、`WINEDLLOVERRIDES`）与目标入口（`MentalOmegaClient.exe` / `Syringe.exe`）。
-- **Mental Omega 专项诊断 (`doctor`)**：检查必需核心文件、Linux/Windows 大小写冲突（如 `RA2MO.ini` vs `ra2mo.ini`），以及 `Resources/ClientDefinitions.ini` 的 `ForbiddenFiles` 冲突提示。
+- **Linux 与 Windows 对称设计**：
+  - `[linux]` 与 `[windows]` 采用完全一致的 `PlatformConfig` 结构（`backend`、`runtime_dir`、`state_dir`、`runner`），同一份 `mentara.toml` 与 Profile 可在双平台直接运行。
+  - **Linux**：默认使用 `fuse-overlayfs` 零复制联合挂载，通过 `gamescope ... -- umu-run` 链式启动，挂载点与状态层分别位于 `$XDG_CACHE_HOME/mentara/runtime` 与 `$XDG_STATE_HOME/mentara`。
+  - **Windows**：默认使用 `symlink` 影子目录树（无开发者模式权限时自动回退至同卷 NTFS 硬链接 `os.link`，`.ini`/`.cfg`/存档隔离复制并在退出时回写），直接原生启动目标 `.exe`，挂载点与状态层位于 `%LOCALAPPDATA%\mentara`。
+- **通用命令链解析**：Runner 与 `doctor` 通过 `--` 分隔符统一解析任意包装器链（如 `gamescope ... -- umu-run`）中的每个可执行文件，无需针对特定工具打补丁。
+- **Mental Omega 专项诊断 (`doctor`)**：检查核心文件、大小写冲突（如 `RA2MO.ini` vs `ra2mo.ini`）、`ForbiddenFiles` 冲突及 `SyringeEx` 的 `ClientDefinitions.ini` 语法迁移。
 
 ## 快速开始
 
-在 `Mentara/` 目录下：
+在 `Mentara/` 目录下（Linux `bash` 与 Windows `PowerShell` 通用）：
 
 ```bash
-# 查看所有 just 任务
-just
-
-# 检查运行环境、核心游戏文件与叠层配置
-just doctor
-
-# 列出所有已配置 Profile
-just profiles
-
-# 预览虚拟目录挂载方案与最终启动命令（不实际启动）
-just dry-run
-
-# 启动默认 Profile（自动挂载 -> 启动游戏 -> 退出自动卸载）
-just launch
-
-# 使用 Syringe.exe 直连 Profile 或切换到 symlink 后端
-just launch syringe
-just launch default --backend symlink
+just                            # 查看所有 just 任务
+just doctor                     # 检查当前平台环境、核心游戏文件与叠层配置
+just profiles                   # 列出所有已配置 Profile 及当前平台后端
+just dry-run                    # 预览虚拟目录挂载方案与最终启动命令
+just launch                     # 自动挂载 -> 启动游戏 -> 退出自动卸载
+just launch syringe             # 使用 Syringe.exe 直连 Profile
+just launch default --backend symlink  # 临时切换虚拟目录后端
 ```
 
-## 叠层目录与多 Profile
-
-在 `mentara.toml` 中按从低到高的优先级声明叠层：
+## 平台与叠层配置 (`mentara.toml`)
 
 ```toml
-[profiles.modded]
-description = "平衡性补丁 + 自定义 DLL"
-layers = ["overlays/base", "overlays/phobos", "overlays/balance"]
-persist_state = true
+base_dir = ".."
+default_profile = "default"
 
-[profiles.modded.runner]
-command = ["umu-run"]
+[linux]
+backend = "fuse-overlayfs"
+
+[linux.runner]
+command = ["gamescope", "-W", "2560", "-H", "1440", "-w", "1920", "-h", "1080", "-f", "--", "umu-run"]
 executable = "MentalOmegaClient.exe"
-env = { WINEDLLOVERRIDES = "ddraw=n,b;Phobos=n,b" }
+env = { WINEDLLOVERRIDES = "ddraw=n,b" }
+
+[windows]
+backend = "symlink"
+
+[windows.runner]
+command = []
+executable = "MentalOmegaClient.exe"
+
+[profiles.default]
+layers = ["overlays/phobos", "overlays/base"]
+persist_state = true
 ```
-
-常用叠层管理命令：
-
-```bash
-# 创建新的叠层目录
-just init-layer phobos
-
-# 查看哪些 INI / DLL 被覆盖及其遮蔽来源
-just inspect-ini-dll
-
-# 手动挂载/卸载虚拟目录以便调试检查
-just mount
-just unmount
-```
-
-> 虚拟挂载点默认位于 `$XDG_CACHE_HOME/mentara/runtime/<profile>/merged`（默认 `~/.cache/mentara/runtime/<profile>/merged`），可写持久化层默认位于 `$XDG_STATE_HOME/mentara/<profile>/upper`，均位于 `$HOME` 下且独立于原游戏目录——既避免 `Mentara/` 嵌套递归，也避免 `umu-run` / `steamrt` (`bwrap`) 在 `/run/user/$UID` 或 `/tmp` 中的容器挂载冲突。
 
 ## 开发与质量门禁
 

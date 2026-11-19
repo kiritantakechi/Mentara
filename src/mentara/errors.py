@@ -222,7 +222,7 @@ class OverlayError(MentaraError):
 
 
 class MountError(OverlayError):
-    """Raised when a FUSE mount or unmount command fails."""
+    """Raised when a FUSE mount or unmount operation fails."""
 
     command: tuple[str, ...]
     returncode: int | None
@@ -248,6 +248,22 @@ class MountError(OverlayError):
         self.command = command
         self.returncode = returncode
         self.stderr = stderr
+
+    @classmethod
+    def unsupported_platform(cls, backend: str, platform: str) -> Self:
+        """Build an error when a backend is unavailable on a platform.
+
+        Args:
+            backend: Backend identifier such as `fuse-overlayfs`.
+            platform: Host platform identifier such as `windows`.
+
+        Returns:
+            A `MountError` explaining the platform constraint.
+        """
+        return cls(
+            f"Backend {backend!r} is not supported on platform {platform!r}; "
+            "use backend = 'symlink'."
+        )
 
     @classmethod
     def tool_missing(cls, tool: str) -> Self:
@@ -296,7 +312,7 @@ class RunnerError(MentaraError):
 
     @classmethod
     def missing_runner(cls, command: str) -> Self:
-        """Build an error when the runner binary cannot be located.
+        """Build an error when a runner binary cannot be located.
 
         Args:
             command: Configured runner executable name or path.

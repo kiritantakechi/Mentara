@@ -1,9 +1,12 @@
-"""Mentara: virtual overlay launcher for Mental Omega."""
+"""Mentara: cross-platform virtual overlay launcher for Mental Omega."""
 
 from mentara.cli import main
 from mentara.config import (
     BackendKind,
     MentaraConfig,
+    PlatformConfig,
+    PlatformKind,
+    PlatformOverrideConfig,
     ProfileConfig,
     ProfileOverrides,
     ResolvedProfile,
@@ -45,6 +48,7 @@ from mentara.runner import (
     LaunchSpec,
     build_launch_spec,
     execute_launch,
+    extract_command_binaries,
 )
 
 __all__ = [
@@ -67,6 +71,9 @@ __all__ = [
     "OverlayBackend",
     "OverlayError",
     "OverlayPlan",
+    "PlatformConfig",
+    "PlatformKind",
+    "PlatformOverrideConfig",
     "ProfileConfig",
     "ProfileOverrides",
     "ResolvedProfile",
@@ -80,6 +87,7 @@ __all__ = [
     "build_launch_spec",
     "build_overlay_plan",
     "execute_launch",
+    "extract_command_binaries",
     "find_config_path",
     "get_backend",
     "load_config",

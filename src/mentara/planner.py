@@ -1,6 +1,5 @@
 """Pure layer planning and conflict inspection for overlays."""
 
-import os
 from dataclasses import dataclass
 from enum import StrEnum
 from fnmatch import fnmatchcase
@@ -219,8 +218,7 @@ def _scan_source(
     folded_variants: dict[str, dict[Path, str]],
 ) -> None:
     excluded = frozenset(source.exclude)
-    for dirpath, dirnames, filenames in os.walk(source.root):
-        current_dir = Path(dirpath)
+    for current_dir, dirnames, filenames in source.root.walk():
         rel_dir = current_dir.relative_to(source.root)
         is_top_level = rel_dir == Path()
 

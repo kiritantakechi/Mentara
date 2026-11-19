@@ -1,4 +1,4 @@
-"""Command assembly and subprocess execution for game runners."""
+"""Command assembly and cross-platform subprocess execution."""
 
 import logging
 import os
@@ -10,7 +10,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
-lazy from collections.abc import Callable, Generator, Mapping
+lazy from collections.abc import Callable, Generator, Mapping, Sequence
 lazy from types import FrameType
 
 from mentara.errors import RunnerError
@@ -22,10 +22,14 @@ __all__ = [
     "LaunchSpec",
     "build_launch_spec",
     "execute_launch",
+    "extract_command_binaries",
 ]
 
 _LOGGER = logging.getLogger(__name__)
 _TERMINATE_TIMEOUT_SECONDS = 5.0
+_IS_POSIX = not os.name.startswith("nt")
+
+type _SignalHandler = Callable[[int, FrameType | None], object] | int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +40,7 @@ class LaunchSpec:
     cwd: Path
     env: frozendict[str, str]
     executable_path: Path
+    required_binaries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +49,31 @@ class LaunchResult:
 
     spec: LaunchSpec
     returncode: int
+
+
+def extract_command_binaries(command: Sequence[str]) -> tuple[str, ...]:
+    """Extract every executable token from a wrapper command chain.
+
+    The leading token and any token immediately following a `--`
+    separator (such as `gamescope ... -- umu-run`) are treated as
+    executables that must exist on the host.
+
+    Args:
+        command: Configured runner prefix command tokens.
+
+    Returns:
+        Ordered tuple of executable tokens in `command`.
+    """
+    binaries: list[str] = []
+    expect_binary = True
+    for arg in command:
+        if arg == "--":
+            expect_binary = True
+            continue
+        if expect_binary:
+            binaries.append(arg)
+            expect_binary = False
+    return tuple(binaries)
 
 
 def build_launch_spec(
@@ -88,6 +118,7 @@ def build_launch_spec(
         cwd=workspace.merged_dir,
         env=frozendict(env),
         executable_path=executable_path,
+        required_binaries=extract_command_binaries(profile.runner.command),
     )
 
 
@@ -96,7 +127,7 @@ def execute_launch(spec: LaunchSpec) -> LaunchResult:
 
     Installs a temporary `SIGTERM` handler on the main thread so clean
     termination unwinds callers (such as FUSE unmounts) after stopping
-    the child process group.
+    the child process tree.
 
     Args:
         spec: Fully prepared `LaunchSpec`.
@@ -105,13 +136,15 @@ def execute_launch(spec: LaunchSpec) -> LaunchResult:
         `LaunchResult` carrying the child process exit status.
 
     Raises:
-        RunnerError: If the runner or target executable is missing or
-            cannot be spawned.
+        RunnerError: If a wrapper binary or target executable is missing
+            or cannot be spawned.
     """
     if not spec.executable_path.exists():
         raise RunnerError.missing_executable(spec.executable_path)
 
-    _ensure_runner_exists(spec.argv[0], path_env=spec.env.get("PATH"))
+    path_env = spec.env.get("PATH")
+    for program in spec.required_binaries:
+        _ensure_runner_exists(program, path_env=path_env)
     _LOGGER.info("Launching %s in %s", spec.argv, spec.cwd)
 
     try:
@@ -120,7 +153,7 @@ def execute_launch(spec: LaunchSpec) -> LaunchResult:
             spec.argv,
             cwd=spec.cwd,
             env=dict(spec.env),
-            start_new_session=True,
+            start_new_session=_IS_POSIX,
         )
     except OSError as exc:
         raise RunnerError.spawn_failed(spec.argv, str(exc)) from exc
@@ -129,7 +162,7 @@ def execute_launch(spec: LaunchSpec) -> LaunchResult:
         with _sigterm_as_interrupt():
             returncode = process.wait()
     except KeyboardInterrupt:
-        _terminate_process_group(process)
+        _terminate_process(process)
         raise
 
     return LaunchResult(spec=spec, returncode=returncode)
@@ -137,13 +170,17 @@ def execute_launch(spec: LaunchSpec) -> LaunchResult:
 
 def _expand_env_value(raw: str, substitutions: Mapping[str, str]) -> str:
     expanded = Template(raw).safe_substitute(substitutions)
-    if expanded.startswith("~/") or expanded == "~":
+    if expanded.startswith(("~/", "~\\")) or expanded == "~":
         return str(Path(expanded).expanduser())
     return expanded
 
 
+def _is_explicit_path(program: str) -> bool:
+    return "/" in program or "\\" in program or Path(program).drive != ""
+
+
 def _ensure_runner_exists(program: str, *, path_env: str | None) -> None:
-    if "/" in program:
+    if _is_explicit_path(program):
         if not Path(program).exists():
             raise RunnerError.missing_runner(program)
         return
@@ -160,7 +197,7 @@ def _sigterm_as_interrupt() -> Generator[None]:
     def _handle_sigterm(_signum: int, _frame: FrameType | None) -> None:
         raise KeyboardInterrupt
 
-    previous: Callable[[int, FrameType | None], object] | int | None = signal.signal(
+    previous: _SignalHandler = signal.signal(
         signal.SIGTERM,
         _handle_sigterm,
     )
@@ -170,19 +207,27 @@ def _sigterm_as_interrupt() -> Generator[None]:
         signal.signal(signal.SIGTERM, previous)
 
 
-def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
-    _LOGGER.warning("Interrupted; terminating process group %s", process.pid)
-    with suppress(ProcessLookupError):
-        os.killpg(process.pid, signal.SIGTERM)
+    _LOGGER.warning("Interrupted; terminating child process %s", process.pid)
+    killpg = getattr(os, "killpg", None)
+    if _IS_POSIX and callable(killpg):
+        with suppress(ProcessLookupError, OSError):
+            killpg(process.pid, signal.SIGTERM)
+    else:
+        with suppress(OSError):
+            process.terminate()
+
     try:
         process.wait(timeout=_TERMINATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        _LOGGER.warning(
-            "Process group %s did not exit; sending SIGKILL",
-            process.pid,
-        )
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
+        _LOGGER.warning("Child process %s did not exit; killing", process.pid)
+        sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
+        if _IS_POSIX and callable(killpg):
+            with suppress(ProcessLookupError, OSError):
+                killpg(process.pid, sigkill)
+        else:
+            with suppress(OSError):
+                process.kill()
         process.wait()

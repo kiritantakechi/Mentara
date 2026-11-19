@@ -1,48 +1,46 @@
-# Mentara — Mental Omega Virtual Overlay Launcher Configuration
+# Mentara — Cross-Platform Mental Omega Virtual Overlay Launcher
 #
 # Base game files stay read-only in `base_dir` while custom INI, DLL,
 # and asset layers are stacked in a decoupled virtual directory.
+# `[linux]` and `[windows]` are symmetric host-platform tables so the
+# same repository and profiles run natively on both systems.
 
 base_dir = ".."
 default_profile = "default"
-
-# Virtual workspace backend:
-# - "fuse-overlayfs": zero-copy rootless union mount (recommended on Linux)
-# - "symlink": shadow tree using symlinks + isolated writable copies
-backend = "fuse-overlayfs"
-
-# Top-level entries ignored when scanning base_dir and layers in symlink
-# mode and `mentara inspect`.
 exclude = ["Mentara", ".git", ".gitkeep"]
-
-# Files copied instead of symlinked by the `symlink` backend so runtime
-# edits never mutate base_dir or overlay layers.
 copy_patterns = ["*.ini", "*.cfg", "*.log", "*.sav", "*.key"]
 
-# Optional explicit directories (must NOT overlap base_dir or layers).
-# Leave commented to use $XDG_CACHE_HOME/mentara/runtime (default:
-# ~/.cache/mentara/runtime) and $XDG_STATE_HOME/mentara (default:
-# ~/.local/state/mentara). Keeping runtime_dir under $HOME avoids
-# pressure-vessel / bwrap conflicts with /run/user/$UID and /tmp.
-# runtime_dir = "~/.cache/mentara/runtime"
-# state_dir = "~/.local/state/mentara"
+[linux]
+# Zero-copy rootless FUSE union mount; runtime under ~/.cache/mentara/runtime,
+# persistent writable layer under ~/.local/state/mentara.
+backend = "fuse-overlayfs"
 
-[runner]
-# Generic launcher prefix:
-# - Proton / UMU: ["umu-run"]
-# - System Wine:  ["wine"]
-# - Custom:       ["/path/to/wrapper", "--flag"]
-command = ["umu-run"]
+[linux.runner]
+# Wrapper chain separated by "--": gamescope micro-compositor -> umu-run.
+command = [
+    "gamescope",
+    "-W", "2560",
+    "-H", "1440",
+    "-w", "1920",
+    "-h", "1080",
+    "-f",
+    "--",
+    "umu-run",
+]
 executable = "MentalOmegaClient.exe"
 args = []
+env = { WINEDLLOVERRIDES = "ddraw=n,b" }
 
-[runner.env]
-# Configure Wine/Proton DLL overrides and prefix paths here.
-# Template variables supported: $MERGED_DIR, $BASE_DIR, $STATE_DIR, $PROFILE
-WINEDLLOVERRIDES = "ddraw=n,b"
-# WINEPREFIX = "~/.local/share/wineprefixes/mental-omega"
-# PROTONPATH = "GE-Proton"
-# GAMEID = "umu-default"
+[windows]
+# Shadow staging tree using symlinks/hardlinks + isolated writable copies;
+# runtime and persistent state under %LOCALAPPDATA%\mentara.
+backend = "symlink"
+
+[windows.runner]
+# Direct native execution on Windows (empty wrapper command).
+command = []
+executable = "MentalOmegaClient.exe"
+args = []
 
 [profiles.default]
 description = "Mental Omega Client with Phobos v0.5-alpha2 and base overlay"
@@ -56,7 +54,7 @@ persist_state = true
 
 [profiles.syringe.runner]
 executable = "Syringe.exe"
-args = ["gamemd.exe", "-CD", "-SPEEDCONTROL", "-LOG"]
+args = ["gamemd.exe", "--args=-SPAWN -CD -SPEEDCONTROL -LOG"]
 
 [profiles.vanilla]
 description = "Clean base Mental Omega without overlay layers"
