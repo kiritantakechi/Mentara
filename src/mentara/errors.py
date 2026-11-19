@@ -148,6 +148,18 @@ class OverlayError(MentaraError):
         return cls(f"Missing {role} directory: {path}")
 
     @classmethod
+    def missing_virtual_file(cls, path: Path) -> Self:
+        """Build an error when a virtual file is absent from the plan.
+
+        Args:
+            path: Requested relative path inside the virtual workspace.
+
+        Returns:
+            An `OverlayError` naming the missing virtual file.
+        """
+        return cls(f"Virtual file not found in overlay plan: {path.as_posix()}")
+
+    @classmethod
     def non_empty_target(cls, path: Path) -> Self:
         """Build an error when a mount or staging target is non-empty.
 

@@ -2,8 +2,6 @@
 
 import os
 import shutil
-from configparser import ConfigParser
-from configparser import Error as ConfigParserError
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -11,13 +9,17 @@ from pathlib import Path
 from mentara.config import BackendKind, PlatformKind, ResolvedProfile
 from mentara.errors import OverlayError
 from mentara.overlay import plan_profile
+from mentara.patcher import read_ini_section
 from mentara.planner import (
     EntryOrigin,
     FileEntry,
     OverlayPlan,
     render_entry_text,
 )
-from mentara.runner import extract_command_binaries
+from mentara.runner import (
+    extract_command_binaries,
+    resolve_command_binary,
+)
 
 __all__ = [
     "Diagnostic",
@@ -255,12 +257,7 @@ def _check_runner(
     path_env = profile.runner.env.get("PATH") or os.environ.get("PATH")
     resolved_bins: list[str] = []
     for program in binaries:
-        is_path = "/" in program or "\\" in program or Path(program).drive != ""
-        resolved = (
-            program
-            if is_path and Path(program).exists()
-            else shutil.which(program, path=path_env)
-        )
+        resolved = resolve_command_binary(program, path_env=path_env)
         if resolved is None:
             diagnostics.append(
                 Diagnostic(
@@ -441,20 +438,12 @@ def _check_syringeex_client_defs(
     if not _is_syringeex_binary(syringe.source_path):
         return
 
-    parser = _parse_ini_entry(client_defs)
-    if parser is None:
+    settings = _read_ini_settings(client_defs)
+    if settings is None:
         return
 
-    launcher_exe = parser.get(
-        "Settings",
-        "GameLauncherExecutableName",
-        fallback="",
-    ).strip()
-    extra_params = parser.get(
-        "Settings",
-        "ExtraCommandLineParams",
-        fallback="",
-    )
+    launcher_exe = settings.get("gamelauncherexecutablename", "").strip()
+    extra_params = settings.get("extracommandlineparams", "")
     if launcher_exe or "--args=" not in extra_params:
         diagnostics.append(
             Diagnostic(
@@ -487,22 +476,16 @@ def _is_syringeex_binary(path: Path) -> bool:
 
 
 def _read_forbidden_files(entry: FileEntry) -> frozenset[str]:
-    parser = _parse_ini_entry(entry)
-    if parser is None:
+    settings = _read_ini_settings(entry)
+    if settings is None:
         return frozenset()
-    raw = parser.get("Settings", "ForbiddenFiles", fallback="")
+    raw = settings.get("forbiddenfiles", "")
     return frozenset(item.strip().casefold() for item in raw.split(",") if item.strip())
 
 
-def _parse_ini_entry(entry: FileEntry) -> ConfigParser | None:
+def _read_ini_settings(entry: FileEntry) -> frozendict[str, str] | None:
     try:
         text = render_entry_text(entry)
     except OverlayError:
         return None
-
-    parser = ConfigParser(interpolation=None, strict=False)
-    try:
-        parser.read_string(text)
-    except ConfigParserError:
-        return None
-    return parser
+    return read_ini_section(text, "Settings")

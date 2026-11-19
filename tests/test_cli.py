@@ -26,7 +26,7 @@ def _setup_project(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (layer_dir / "ddraw.dll").write_bytes(b"custom-ddraw")
-    (layer_dir / "RA2MO.ini.patch.ini").write_text(
+    (layer_dir / "RA2MO.patch.ini").write_text(
         "[Options]\nSpeed=5\n",
         encoding="utf-8",
     )
@@ -159,6 +159,15 @@ def test_cli_returns_nonzero_on_unknown_profile(tmp_path: Path) -> None:
     )
     assert code == 1
     assert "Unknown profile 'nope'" in err.getvalue()
+
+    err = io.StringIO()
+    code = main(
+        ["-c", str(config_path), "inspect", "--render", "nonexistent.ini"],
+        stdout=out,
+        stderr=err,
+    )
+    assert code == 1
+    assert "Virtual file not found in overlay plan: nonexistent.ini" in err.getvalue()
 
 
 def test_cli_inspect_text_and_doctor(tmp_path: Path) -> None:

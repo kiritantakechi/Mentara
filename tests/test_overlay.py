@@ -45,7 +45,7 @@ def _make_profile(
     layer_b.mkdir(parents=True)
     (layer_b / "Phobos.dll").write_bytes(b"phobos-dll")
     (layer_b / "INI").mkdir(parents=True)
-    (layer_b / "INI" / "base.ini.patch.ini").write_text(
+    (layer_b / "INI" / "base.patch.ini").write_text(
         "[Patched]\nAddedKey=42\n",
         encoding="utf-8",
     )

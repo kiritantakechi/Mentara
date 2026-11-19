@@ -237,6 +237,16 @@ class ResolvedProfile:
     copy_patterns: tuple[str, ...]
     runner: ResolvedRunner
 
+    @property
+    def merged_dir(self) -> Path:
+        """Target virtual workspace directory for this profile."""
+        return self.runtime_dir / "merged"
+
+    @property
+    def upper_dir(self) -> Path | None:
+        """Persistent writable layer directory, or `None`."""
+        return self.state_dir / "upper" if self.persist_state else None
+
 
 def find_config_path(
     explicit: Path | None = None,
@@ -486,11 +496,14 @@ def _resolve_layers(
     return tuple(resolved)
 
 
+def _env_path(var_name: str) -> Path | None:
+    raw = os.environ.get(var_name)
+    return Path(raw).expanduser() if raw is not None and raw != "" else None
+
+
 def _windows_app_data_root() -> Path:
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data is not None and local_app_data != "":
-        return (Path(local_app_data).expanduser() / "mentara").resolve()
-    return (Path.home() / "AppData" / "Local" / "mentara").resolve()
+    base = _env_path("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+    return (base / "mentara").resolve()
 
 
 def _default_runtime_root(platform: PlatformKind) -> Path:
@@ -498,10 +511,8 @@ def _default_runtime_root(platform: PlatformKind) -> Path:
         case PlatformKind.WINDOWS:
             return _windows_app_data_root() / "runtime"
         case PlatformKind.LINUX:
-            xdg_cache = os.environ.get("XDG_CACHE_HOME")
-            if xdg_cache is not None and xdg_cache != "":
-                return (Path(xdg_cache).expanduser() / "mentara" / "runtime").resolve()
-            return (Path.home() / ".cache" / "mentara" / "runtime").resolve()
+            base = _env_path("XDG_CACHE_HOME") or (Path.home() / ".cache")
+            return (base / "mentara" / "runtime").resolve()
 
 
 def _default_state_root(platform: PlatformKind) -> Path:
@@ -509,10 +520,8 @@ def _default_state_root(platform: PlatformKind) -> Path:
         case PlatformKind.WINDOWS:
             return _windows_app_data_root() / "state"
         case PlatformKind.LINUX:
-            xdg_state = os.environ.get("XDG_STATE_HOME")
-            if xdg_state is not None and xdg_state != "":
-                return (Path(xdg_state).expanduser() / "mentara").resolve()
-            return (Path.home() / ".local" / "state" / "mentara").resolve()
+            base = _env_path("XDG_STATE_HOME") or (Path.home() / ".local" / "state")
+            return (base / "mentara").resolve()
 
 
 def _ensure_disjoint_workspace(

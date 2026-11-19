@@ -9,22 +9,29 @@ the original Mental Omega game directory.
   bundled `Syringe.exe` / SyringeEx `0.1.0.2`, `gamemd.edb`,
   `Syringe.LICENSE.txt`, and `Phobos.pdb` which is excluded from Git via
   `*.pdb` in `.gitignore`), plus the text-level patch
-  `Resources/ClientDefinitions.ini.patch.ini` which modifies only the 3
+  `Resources/ClientDefinitions.patch.ini` which modifies only the 3
   `[Settings]` keys needed for SyringeEx's `--args="..."` launch syntax.
   - Source: https://github.com/Phobos-developers/Phobos/releases/tag/v0.5-alpha2
   - Stacked *below* `overlays/base` so local overrides in `overlays/base`
     always take precedence.
-- `overlays/base/`: Your local custom INI / DLL overrides and `.patch.ini` /
-  `.patch.toml` text patches.
+- `overlays/base/`: Your local custom INI / DLL overrides and
+  `<stem>.patch.{ini,map,yrm,mpr,cfg,inj}` / `<target>.patch.toml` patches.
 
-## Text-Level Patching (`.patch.ini` & `.patch.toml`)
+## Text-Level Patching
 
-Instead of copying an entire INI or config file just to change a few entries,
-drop a `<target>.patch.ini` or `<target>.patch.toml` at the same relative path:
+Instead of copying an entire config or map file just to change a few entries,
+drop a patch file at the same relative path:
 
-### 1. `<target>.patch.ini` (Native Westwood INI Patch)
+### 1. `<stem>.patch.{ini,map,yrm,mpr,cfg,inj}` (Native Westwood INI / Map / KV Patch)
 
-For example, `overlays/phobos/Resources/ClientDefinitions.ini.patch.ini`:
+Directly maps `<stem>.patch.<ext>` to `<stem>.<ext>`:
+- `*.patch.ini` -> `*.ini` (INI configs & rules, e.g. `Resources/ClientDefinitions.patch.ini` -> `Resources/ClientDefinitions.ini`)
+- `*.patch.map` -> `*.map` (Mental Omega campaign/challenge/skirmish maps, e.g. `MapsMO/Challenge/c_aberration.patch.map`)
+- `*.patch.yrm` / `*.patch.mpr` -> `*.yrm` / `*.mpr` (YR / RA2 custom maps)
+- `*.patch.cfg` -> `*.cfg` (flat key-value configs, e.g. `Resources/aqrit.patch.cfg`)
+- `*.patch.inj` -> `*.inj` (Syringe hook definitions, e.g. `Ares.dll.patch.inj`)
+
+For example, `overlays/phobos/Resources/ClientDefinitions.patch.ini`:
 
 ```ini
 ; Modify or add keys in [Settings]

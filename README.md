@@ -6,9 +6,9 @@ Mentara 在启动游戏时自动维护一个与原版游戏目录解耦的虚拟
 
 - **原文件零污染**：游戏本体目录与自定义叠层目录均保持只读干净状态。
 - **文件级 + 文本条目级正交叠层**：
-  - 整文件覆盖（`.dll`、`.mix`、`.ini`）与文本级补丁（`.patch.ini`、`.patch.toml`）职责完全正交，可跨多层按序组合。
-  - **`<target>.patch.ini`（INI 条目级）**：原生 Westwood INI 语法，`Key=Value` 原地修改或新增、`!Key` 删除键、`[-Section]` 删除整节、`+=Value` 自动按当前节最大数字键 `+1` 追加，完整保留底层文件注释与 CRLF 换行。
-  - **`<target>.patch.toml`（通用明文行/块级）**：`[[text]]` 对称操作集（`replace`、`insert_before` / `insert_after`、`prepend` / `append`、`delete_lines`），适用于 `.cfg`、`.config`、`.txt` 等任意明文。
+  - 整文件覆盖（`.dll`、`.mix`、`.ini`）与文本级补丁职责完全正交，可跨多层按序组合。
+  - **`<stem>.patch.{ini,map,yrm,mpr,cfg,inj}`（Westwood INI / 地图 / 键值级）**：直接由后缀确定目标格式（如 `ClientDefinitions.patch.ini` -> `ClientDefinitions.ini`、`c_aberration.patch.map` -> `c_aberration.map`、`aqrit.patch.cfg` -> `aqrit.cfg`、`Ares.dll.patch.inj` -> `Ares.dll.inj`）；支持分节与无节顶层 `Key=Value` 原地修改/新增（保留等号对齐）、`!Key` 删除键、`[-Section]` 删除整节、`+=Value` 自动按当前节最大数字键 `+1` 追加，完整保留注释与 CRLF 换行。
+  - **`<target>.patch.toml`（通用明文行/块级）**：`[[text]]` 对称操作集（`replace`、`insert_before` / `insert_after`、`prepend` / `append`、`delete_lines`），适用于 `.config`、`.xml`、`.edb`、`.txt` 等任意明文。
 - **Linux 与 Windows 对称设计**：
   - `[linux]` 与 `[windows]` 采用完全一致的 `PlatformConfig` 结构（`backend`、`runtime_dir`、`state_dir`、`runner`），同一份 `mentara.toml` 与 Profile 可在双平台直接运行。
   - **Linux**：默认使用 `fuse-overlayfs` 零复制联合挂载，通过 `gamescope ... -- umu-run` 链式启动，挂载点与状态层分别位于 `$XDG_CACHE_HOME/mentara/runtime` 与 `$XDG_STATE_HOME/mentara`。

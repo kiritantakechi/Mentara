@@ -355,8 +355,8 @@ def _cmd_launch(
         preview_workspace = MountedWorkspace(
             profile_name=profile.name,
             backend=profile.backend,
-            merged_dir=profile.runtime_dir / "merged",
-            upper_dir=(profile.state_dir / "upper" if profile.persist_state else None),
+            merged_dir=profile.merged_dir,
+            upper_dir=profile.upper_dir,
             base_dir=profile.base_dir,
             layers=profile.layers,
         )
@@ -409,9 +409,7 @@ def _cmd_unmount(
 ) -> int:
     backend = get_backend(profile.backend)
     backend.unmount(profile, lazy=lazy)
-    stdout.write(
-        f"Unmounted [{profile.backend.value}] {profile.runtime_dir / 'merged'}\n"
-    )
+    stdout.write(f"Unmounted [{profile.backend.value}] {profile.merged_dir}\n")
     return _EXIT_OK
 
 
@@ -431,8 +429,7 @@ def _cmd_render(
     plan = plan_profile(profile)
     entry = plan.lookup_case_insensitive(Path(target))
     if entry is None:
-        role = "virtual file"
-        raise OverlayError.missing_directory(role, Path(target))
+        raise OverlayError.missing_virtual_file(Path(target))
     stdout.write(render_entry_text(entry))
     return _EXIT_OK
 

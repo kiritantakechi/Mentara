@@ -39,7 +39,6 @@ __all__ = [
 
 _LOGGER = logging.getLogger(__name__)
 _MANIFEST_FILENAME = ".mentara-staged.json"
-_MERGED_DIRNAME = "merged"
 _SYNTHESIZED_DIRNAME = "synthesized"
 _EPHEMERAL_DIRNAME = "ephemeral"
 _UPPER_DIRNAME = "upper"
@@ -137,7 +136,7 @@ class FuseOverlayBackend:
 
         _validate_source_directories(profile)
         fuse_bin = _require_tool("fuse-overlayfs")
-        merged_dir = _merged_dir_for(profile)
+        merged_dir = profile.merged_dir
         synthesized_dir = _synthesized_dir_for(profile)
 
         if self.is_mounted(profile):
@@ -154,7 +153,7 @@ class FuseOverlayBackend:
                 _materialize_patched_files(
                     patched_entries,
                     target_root=synthesized_dir,
-                    upper_dir=upper_dir if profile.persist_state else None,
+                    upper_dir=profile.upper_dir,
                 )
                 lower_list.append(synthesized_dir)
             lower_list.extend(reversed(profile.layers))
@@ -193,7 +192,7 @@ class FuseOverlayBackend:
             profile_name=profile.name,
             backend=self.kind,
             merged_dir=merged_dir,
-            upper_dir=upper_dir if profile.persist_state else None,
+            upper_dir=profile.upper_dir,
             base_dir=profile.base_dir,
             layers=profile.layers,
             ephemeral_root=ephemeral_root,
@@ -225,7 +224,7 @@ class FuseOverlayBackend:
             )
 
         merged_dir = (
-            workspace.merged_dir if workspace is not None else _merged_dir_for(profile)
+            workspace.merged_dir if workspace is not None else profile.merged_dir
         )
         ephemeral_root = (
             workspace.ephemeral_root
@@ -279,7 +278,7 @@ class FuseOverlayBackend:
         Returns:
             `True` if `merged` is an active mountpoint.
         """
-        return _is_mountpoint(_merged_dir_for(profile))
+        return _is_mountpoint(profile.merged_dir)
 
 
 class SymlinkStagingBackend:
@@ -306,7 +305,7 @@ class SymlinkStagingBackend:
                 directories/patches are invalid.
         """
         _validate_source_directories(profile)
-        merged_dir = _merged_dir_for(profile)
+        merged_dir = profile.merged_dir
         manifest_path = _manifest_path_for(profile)
 
         if self.is_mounted(profile):
@@ -314,9 +313,7 @@ class SymlinkStagingBackend:
         _ensure_empty_directory(merged_dir)
 
         plan = plan_profile(profile)
-        upper_dir = (
-            profile.state_dir / _UPPER_DIRNAME if profile.persist_state else None
-        )
+        upper_dir = profile.upper_dir
         copied_hashes: dict[str, str] = {}
         linked_files: list[str] = []
 
@@ -328,7 +325,6 @@ class SymlinkStagingBackend:
                 _stage_entry(
                     entry,
                     merged_dir=merged_dir,
-                    upper_dir=upper_dir,
                     copied_hashes=copied_hashes,
                     linked_files=linked_files,
                 )
@@ -374,7 +370,7 @@ class SymlinkStagingBackend:
         """
         _ = lazy
         merged_dir = (
-            workspace.merged_dir if workspace is not None else _merged_dir_for(profile)
+            workspace.merged_dir if workspace is not None else profile.merged_dir
         )
         manifest_path = _manifest_path_for(profile)
 
@@ -406,9 +402,7 @@ class SymlinkStagingBackend:
         Returns:
             `True` when the staging manifest and merged directory exist.
         """
-        return (
-            _manifest_path_for(profile).is_file() and _merged_dir_for(profile).is_dir()
-        )
+        return _manifest_path_for(profile).is_file() and profile.merged_dir.is_dir()
 
 
 def get_backend(kind: BackendKind) -> OverlayBackend:
@@ -445,7 +439,7 @@ def clean_state(profile: ResolvedProfile) -> bool:
     """
     for kind in BackendKind:
         if get_backend(kind).is_mounted(profile):
-            raise OverlayError.already_active(_merged_dir_for(profile))
+            raise OverlayError.already_active(profile.merged_dir)
 
     if not profile.state_dir.exists():
         return False
@@ -487,11 +481,11 @@ def profile_sources(
         )
         for layer in profile.layers
     )
-    if include_state and profile.persist_state:
+    if include_state and profile.upper_dir is not None:
         sources.append(
             LayerSource(
                 label="state",
-                root=profile.state_dir / _UPPER_DIRNAME,
+                root=profile.upper_dir,
                 origin=EntryOrigin.STATE,
                 exclude=(),
                 required=False,
@@ -598,15 +592,10 @@ class _StagingManifest:
         )
 
 
-def _merged_dir_for(profile: ResolvedProfile) -> Path:
-    return profile.runtime_dir / _MERGED_DIRNAME
-
-
 def _stage_entry(
     entry: FileEntry,
     *,
     merged_dir: Path,
-    upper_dir: Path | None,
     copied_hashes: dict[str, str],
     linked_files: list[str],
 ) -> None:
@@ -617,12 +606,6 @@ def _stage_entry(
         case Materialization.PATCH:
             rendered = render_entry_text(entry)
             target.write_text(rendered, encoding="utf-8", newline="")
-            if upper_dir is not None and (upper_dir / entry.relative_path).is_file():
-                (upper_dir / entry.relative_path).write_text(
-                    rendered,
-                    encoding="utf-8",
-                    newline="",
-                )
             copied_hashes[rel_posix] = _sha256_file(target)
         case Materialization.COPY:
             if entry.source_path is not None:

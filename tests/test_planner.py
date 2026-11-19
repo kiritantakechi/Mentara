@@ -141,11 +141,11 @@ def test_build_overlay_plan_composes_patches_across_layers_and_state(
         encoding="utf-8",
         newline="",
     )
-    (layer_one / "RA2MO.ini.patch.ini").write_text(
+    (layer_one / "RA2MO.patch.ini").write_text(
         "[Options]\nGameSpeed=4\nToolTips=yes\n",
         encoding="utf-8",
     )
-    (layer_two / "RA2MO.ini.patch.ini").write_text(
+    (layer_two / "RA2MO.patch.ini").write_text(
         "[Options]\n!Difficulty\n[Video]\nScreenWidth=1920\n",
         encoding="utf-8",
     )

@@ -23,6 +23,7 @@ __all__ = [
     "build_launch_spec",
     "execute_launch",
     "extract_command_binaries",
+    "resolve_command_binary",
 ]
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,6 +75,25 @@ def extract_command_binaries(command: Sequence[str]) -> tuple[str, ...]:
             binaries.append(arg)
             expect_binary = False
     return tuple(binaries)
+
+
+def resolve_command_binary(
+    program: str,
+    *,
+    path_env: str | None = None,
+) -> str | None:
+    """Resolve an executable name or explicit path to a host binary.
+
+    Args:
+        program: Binary name (searched on `PATH`) or explicit file path.
+        path_env: Optional `PATH` override for `shutil.which`.
+
+    Returns:
+        Resolved binary path string if found, otherwise `None`.
+    """
+    if "/" in program or "\\" in program or Path(program).drive != "":
+        return program if Path(program).exists() else None
+    return shutil.which(program, path=path_env)
 
 
 def build_launch_spec(
@@ -144,7 +164,8 @@ def execute_launch(spec: LaunchSpec) -> LaunchResult:
 
     path_env = spec.env.get("PATH")
     for program in spec.required_binaries:
-        _ensure_runner_exists(program, path_env=path_env)
+        if resolve_command_binary(program, path_env=path_env) is None:
+            raise RunnerError.missing_runner(program)
     _LOGGER.info("Launching %s in %s", spec.argv, spec.cwd)
 
     try:
@@ -173,19 +194,6 @@ def _expand_env_value(raw: str, substitutions: Mapping[str, str]) -> str:
     if expanded.startswith(("~/", "~\\")) or expanded == "~":
         return str(Path(expanded).expanduser())
     return expanded
-
-
-def _is_explicit_path(program: str) -> bool:
-    return "/" in program or "\\" in program or Path(program).drive != ""
-
-
-def _ensure_runner_exists(program: str, *, path_env: str | None) -> None:
-    if _is_explicit_path(program):
-        if not Path(program).exists():
-            raise RunnerError.missing_runner(program)
-        return
-    if shutil.which(program, path=path_env) is None:
-        raise RunnerError.missing_runner(program)
 
 
 @contextmanager
