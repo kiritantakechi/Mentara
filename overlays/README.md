@@ -8,38 +8,55 @@ the original Mental Omega game directory.
 - `overlays/phobos/`: Upstream **Phobos `v0.5-alpha2`** (`Phobos.dll`,
   bundled `Syringe.exe` / SyringeEx `0.1.0.2`, `gamemd.edb`,
   `Syringe.LICENSE.txt`, and `Phobos.pdb` which is excluded from Git via
-  `*.pdb` in `.gitignore`), plus declarative `.patch.ini` files (including
-  virtual MIX container patches under `expandmo99.mix/`) that modernize
-  Mental Omega's UX, visuals, HUD, controls, and client launch:
-  - `RA2MO.patch.ini`: Enables `[Phobos]` extended tooltip descriptions &
-    blur, smart harvester selection/deployment filtering, IFV mode type-select,
-    building placement preview, designator/enhancer range rings, floating
-    digital displays, power delta & harvester counters, elapsed game clock,
-    centered subtitle board, adaptive real-time timers, and automatic
-    campaign mission start checkpoint saves.
-  - `expandmo99.mix/uimd.patch.ini`: Patches `uimd.ini` directly inside
-    `expandmo99.mix` (automatically decrypting/sanitizing the S4-protected
-    base `expandmo99.mix` and mixing the patched entry back into the virtual
-    `expandmo99.mix`) to enable fast smooth credit rolling (`MaxStep=500`),
-    sidebar harvester & power delta counters, centered pause menu background
-    on widescreen displays, and anchored 360px extended tooltips.
-  - `expandmo99.mix/rulesmo.patch.ini`: Patches `rulesmo.ini` directly inside
-    `expandmo99.mix` (avoiding loose root `rulesmo.ini` files and keeping
-    `ClientDefinitions.ini` `ForbiddenFiles` intact) to enable building
-    production queues, auto-tab switching when selecting factories, fast
-    transport/bunker boarding & unloading, translucent building placement
-    previews, floating `$` harvester/grinder income & drain numbers, dynamic
-    turret & altitude-scaled aircraft shadows, fixed voxel lighting & RLE
-    transparency blitters, water wakes for all locomotors, off-screen combat
-    voice alerts, hover HP & factory progress digital displays,
-    faction-specific in-game win/lose themes, and `LowSelectionPriority=true`
-    on all 10 Mental Omega harvester types.
+  `*.pdb` in `.gitignore`), bespoke modern pixel-art SHP/PCX HUD assets,
+  Chinese CSF localization (`stringtable50.csf`), and declarative
+  `.patch.ini` / nested MIX container patches (`expandmo99.mix/`,
+  `expandmo96.mix/`):
+  - **Custom Modern HUD Assets**:
+    - `phdigit.shp` + `phdigit.pal` / `phdigcy.pal`: Crisp 36-frame micro-HUD
+      pixel numerals (emerald / amber / coral / cyber-cyan with 1px dark
+      outline, zero solid black boxes) for hover unit/building HP and factory
+      progress displays.
+    - `phselinf.shp` + `phselunt.shp` + `phsel.pal`: Translucent 2:1 isometric
+      chamfered octagonal ground selection rings (`EnableSelectBox=true`) with
+      HP-colored cardinal brackets and dashed vertical altitude drop-lines for
+      aircraft and jumpjets.
+    - `sws_{all,sov,eps,foe}_{top,mid,bot,on,off}.pcx`: 24-bit full-color
+      faction-matched C&C3-style left SuperWeapon Sidebar panels and
+      collapsible toggle tabs for Allies, Soviet, Epsilon, and Foehn.
+    - `expandmo96.mix/sidec0{1md,2md,3,3md,4,4md}.mix/tab0{0..3}pp.shp`:
+      C&C Remastered-style glowing LED production progress bars drawn directly
+      below each sidebar tab in each faction's native `sidebar.pal`.
+    - `stringtable50.csf`: Native Chinese CSF labels for Phobos HUD counters,
+      tooltips, game clock (`TXT_GAMETIME`), and hotkey names/descriptions
+      (eliminating missing-glyph squares from unsupported Unicode emojis).
+  - `RA2MO.patch.ini`: Enables `[Phobos]` crisp tooltip descriptions (with
+    16-bit blur smear disabled), isometric `EnableSelectBox`, smart harvester
+    selection/deployment filtering, IFV mode type-select, building placement
+    preview, designator/enhancer range rings, SHP digital displays, power delta
+    & harvester counters, elapsed game clock, translucent centered subtitle
+    board, adaptive real-time timers, and mission start checkpoint saves.
+  - `expandmo99.mix/uimd.patch.ini`: Enables fast smooth credit rolling
+    (`MaxStep=500`), aligned harvester & power delta counters (with corrected
+    `75%` / `100%` usage thresholds), sidebar `ProducingProgress` LED bars,
+    C&C3-style collapsible `SuperWeaponSidebar`, centered pause menu
+    background, and anchored 340px extended tooltips with native CSF labels.
+  - `expandmo99.mix/rulesmo.patch.ini`: Enables building production queues,
+    building type-select, auto-tab factory switching, fast transport/bunker
+    boarding & unloading, crisp translucent placement previews (`50%`) over a
+    soft grid (`75%`), floating `$` income/drain indicators, dynamic turret &
+    altitude-scaled shadows, fixed voxel lighting & blitters, water wakes,
+    off-screen combat voice alerts, `SelectBox` rings, SHP micro-HUD digital
+    displays, faction-coordinated tooltip glass & counter palettes/offsets for
+    all 4 Mental Omega factions, win/lose themes, and `LowSelectionPriority` on
+    all 10 harvester types.
   - `Resources/ClientDefinitions.patch.ini`: Migrates `MentalOmegaClient.exe`
     to SyringeEx `--args="..."` launch syntax.
   - `Resources/KeyboardCommands.patch.ini`: Exposes Phobos hotkeys (Idle
     Harvester, Select Captured, Deselect 1/5, Toggle Digital Display, Toggle
-    Designator Range, Toggle Center Message Board, Quicksave, Damage Numbers)
-    in the client's graphical Hotkey configuration window.
+    Designator Range, Toggle Super Weapon Sidebar, Toggle Center Message Board,
+    Quicksave, Damage Numbers) in the client's graphical Hotkey configuration
+    window.
   - `Resources/OptionsWindow.patch.ini`: Hides the legacy 2021 `savefixmo.dll`
     checkbox which is natively superseded by Phobos `v0.5-alpha2`.
   - Source: https://github.com/Phobos-developers/Phobos/releases/tag/v0.5-alpha2
