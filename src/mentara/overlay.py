@@ -7,20 +7,22 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
-lazy from collections.abc import Generator, Mapping
+from typing import Protocol, Self
 
 from mentara.config import BackendKind, PlatformKind, ResolvedProfile
 from mentara.errors import MountError, OverlayError
 from mentara.planner import (
     EntryOrigin,
+    FileEntry,
     LayerSource,
     Materialization,
     OverlayPlan,
     build_overlay_plan,
+    render_entry_text,
 )
 
 __all__ = [
@@ -29,6 +31,7 @@ __all__ = [
     "OverlayBackend",
     "SymlinkStagingBackend",
     "activate_workspace",
+    "clean_state",
     "get_backend",
     "plan_profile",
     "profile_sources",
@@ -37,6 +40,7 @@ __all__ = [
 _LOGGER = logging.getLogger(__name__)
 _MANIFEST_FILENAME = ".mentara-staged.json"
 _MERGED_DIRNAME = "merged"
+_SYNTHESIZED_DIRNAME = "synthesized"
 _EPHEMERAL_DIRNAME = "ephemeral"
 _UPPER_DIRNAME = "upper"
 _WORK_DIRNAME = "work"
@@ -109,6 +113,10 @@ class FuseOverlayBackend:
     def mount(self, profile: ResolvedProfile) -> MountedWorkspace:
         """Mount `base_dir`, overlay layers, and upperdir via FUSE.
 
+        Any `.patch.ini` or `.patch.toml` entries are rendered into an
+        ephemeral top-level read-only `lowerdir` (`synthesized`) so
+        `state/upper` stays clean of unmodified files.
+
         Args:
             profile: Resolved launcher profile.
 
@@ -118,8 +126,8 @@ class FuseOverlayBackend:
         Raises:
             MountError: If the host platform is not Linux, FUSE tools
                 are missing, or mounting fails.
-            OverlayError: If source directories are missing or target is
-                busy or non-empty.
+            OverlayError: If source directories are missing, patches
+                fail to render, or target is busy/non-empty.
         """
         if profile.platform is not PlatformKind.LINUX:
             raise MountError.unsupported_platform(
@@ -130,14 +138,32 @@ class FuseOverlayBackend:
         _validate_source_directories(profile)
         fuse_bin = _require_tool("fuse-overlayfs")
         merged_dir = _merged_dir_for(profile)
+        synthesized_dir = _synthesized_dir_for(profile)
 
         if self.is_mounted(profile):
             raise OverlayError.already_active(merged_dir)
         _ensure_empty_directory(merged_dir)
 
+        plan = plan_profile(profile)
         upper_dir, work_dir, ephemeral_root = _prepare_fuse_dirs(profile)
-        lower_dirs = (*reversed(profile.layers), profile.base_dir)
-        lower_opt = ":".join(_escape_overlay_opt(path) for path in lower_dirs)
+        patched_entries = plan.patched_entries()
+
+        try:
+            lower_list: list[Path] = []
+            if patched_entries:
+                _materialize_patched_files(
+                    patched_entries,
+                    target_root=synthesized_dir,
+                    upper_dir=upper_dir if profile.persist_state else None,
+                )
+                lower_list.append(synthesized_dir)
+            lower_list.extend(reversed(profile.layers))
+            lower_list.append(profile.base_dir)
+        except Exception:
+            _cleanup_fuse_dirs(merged_dir, ephemeral_root, synthesized_dir)
+            raise
+
+        lower_opt = ":".join(_escape_overlay_opt(path) for path in lower_list)
         upper_opt = _escape_overlay_opt(upper_dir)
         work_opt = _escape_overlay_opt(work_dir)
 
@@ -156,8 +182,7 @@ class FuseOverlayBackend:
             check=False,
         )
         if result.returncode != 0:
-            if ephemeral_root is not None:
-                shutil.rmtree(ephemeral_root, ignore_errors=True)
+            _cleanup_fuse_dirs(merged_dir, ephemeral_root, synthesized_dir)
             raise MountError.command_failed(
                 command,
                 result.returncode,
@@ -207,11 +232,12 @@ class FuseOverlayBackend:
             if workspace is not None
             else profile.runtime_dir / _EPHEMERAL_DIRNAME
         )
+        synthesized_dir = _synthesized_dir_for(profile)
 
         if not _is_mountpoint(merged_dir):
             if workspace is None:
                 raise OverlayError.not_active(merged_dir)
-            _cleanup_fuse_dirs(merged_dir, ephemeral_root)
+            _cleanup_fuse_dirs(merged_dir, ephemeral_root, synthesized_dir)
             return
 
         unmount_bin = _find_unmount_tool()
@@ -227,7 +253,7 @@ class FuseOverlayBackend:
                 check=False,
             )
             if result.returncode == 0:
-                _cleanup_fuse_dirs(merged_dir, ephemeral_root)
+                _cleanup_fuse_dirs(merged_dir, ephemeral_root, synthesized_dir)
                 return
             _LOGGER.debug(
                 "Unmount attempt %d/%d failed for %s: %s",
@@ -265,8 +291,9 @@ class SymlinkStagingBackend:
         """Build a staged virtual directory tree for `profile`.
 
         Read-only assets are symlinked (falling back to hardlinks on
-        Windows when unprivileged), while files matching `copy_patterns`
-        are copied so runtime edits never mutate `base_dir` or layers.
+        Windows when unprivileged), files matching `copy_patterns` are
+        copied, and `.patch.ini`/`.patch.toml` targets are rendered into
+        isolated copies.
 
         Args:
             profile: Resolved launcher profile.
@@ -276,7 +303,7 @@ class SymlinkStagingBackend:
 
         Raises:
             OverlayError: If already active, target non-empty, or source
-                directories are missing.
+                directories/patches are invalid.
         """
         _validate_source_directories(profile)
         merged_dir = _merged_dir_for(profile)
@@ -298,25 +325,21 @@ class SymlinkStagingBackend:
                 (merged_dir / rel_dir).mkdir(parents=True, exist_ok=True)
 
             for entry in plan.entries:
-                target = merged_dir / entry.relative_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                rel_posix = entry.relative_path.as_posix()
-                if entry.materialization is Materialization.COPY:
-                    shutil.copy2(entry.source_path, target)
-                    copied_hashes[rel_posix] = _sha256_file(target)
-                else:
-                    _link_readonly(entry.source_path, target)
-                    linked_files.append(rel_posix)
+                _stage_entry(
+                    entry,
+                    merged_dir=merged_dir,
+                    upper_dir=upper_dir,
+                    copied_hashes=copied_hashes,
+                    linked_files=linked_files,
+                )
 
-            manifest_payload: dict[str, object] = {
-                "profile_name": profile.name,
-                "backend": self.kind.value,
-                "persist_state": profile.persist_state,
-                "upper_dir": str(upper_dir) if upper_dir is not None else None,
-                "copied_hashes": copied_hashes,
-                "linked_files": linked_files,
-            }
-            _write_json_atomic(manifest_path, manifest_payload)
+            manifest = _StagingManifest(
+                persist_state=profile.persist_state,
+                upper_dir=upper_dir,
+                copied_hashes=frozendict(copied_hashes),
+                linked_files=frozenset(linked_files),
+            )
+            _write_json_atomic(manifest_path, manifest.to_dict())
         except Exception:
             shutil.rmtree(merged_dir, ignore_errors=True)
             manifest_path.unlink(missing_ok=True)
@@ -402,6 +425,32 @@ def get_backend(kind: BackendKind) -> OverlayBackend:
             return FuseOverlayBackend()
         case BackendKind.SYMLINK:
             return SymlinkStagingBackend()
+
+
+def clean_state(profile: ResolvedProfile) -> bool:
+    """Remove persisted writable runtime state for `profile`.
+
+    Does not touch `base_dir` or any overlay layer. Refuses to run if
+    either backend currently has `profile` mounted.
+
+    Args:
+        profile: Resolved launcher profile.
+
+    Returns:
+        `True` if `profile.state_dir` existed and was deleted, otherwise
+        `False`.
+
+    Raises:
+        OverlayError: If `profile` currently has an active workspace.
+    """
+    for kind in BackendKind:
+        if get_backend(kind).is_mounted(profile):
+            raise OverlayError.already_active(_merged_dir_for(profile))
+
+    if not profile.state_dir.exists():
+        return False
+    shutil.rmtree(profile.state_dir)
+    return True
 
 
 def profile_sources(
@@ -498,9 +547,95 @@ class _StagingManifest:
     copied_hashes: frozendict[str, str]
     linked_files: frozenset[str]
 
+    def to_dict(self) -> dict[str, object]:
+        """Serialise the manifest to a JSON-compatible mapping."""
+        return {
+            "persist_state": self.persist_state,
+            "upper_dir": (str(self.upper_dir) if self.upper_dir is not None else None),
+            "copied_hashes": dict(self.copied_hashes),
+            "linked_files": sorted(self.linked_files),
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        raw: Mapping[str, object],
+        *,
+        source_path: Path,
+    ) -> Self:
+        """Reconstruct a `_StagingManifest` from `to_dict` output."""
+        persist_state = raw.get("persist_state")
+        upper_raw = raw.get("upper_dir")
+        copied_raw = raw.get("copied_hashes")
+        linked_raw = raw.get("linked_files", [])
+        if (
+            not isinstance(persist_state, bool)
+            or not isinstance(copied_raw, Mapping)
+            or not isinstance(linked_raw, Sequence)
+            or isinstance(linked_raw, str)
+        ):
+            raise OverlayError.invalid_manifest_schema(source_path)
+        if upper_raw is not None and not isinstance(upper_raw, str):
+            raise OverlayError.invalid_manifest_schema(source_path)
+
+        copied_hashes: dict[str, str] = {}
+        for key, value in copied_raw.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise OverlayError.invalid_manifest_schema(source_path)
+            copied_hashes[key] = value
+
+        linked_files: set[str] = set()
+        for item in linked_raw:
+            if not isinstance(item, str):
+                raise OverlayError.invalid_manifest_schema(source_path)
+            linked_files.add(item)
+
+        return cls(
+            persist_state=persist_state,
+            upper_dir=Path(upper_raw) if upper_raw is not None else None,
+            copied_hashes=frozendict(copied_hashes),
+            linked_files=frozenset(linked_files),
+        )
+
 
 def _merged_dir_for(profile: ResolvedProfile) -> Path:
     return profile.runtime_dir / _MERGED_DIRNAME
+
+
+def _stage_entry(
+    entry: FileEntry,
+    *,
+    merged_dir: Path,
+    upper_dir: Path | None,
+    copied_hashes: dict[str, str],
+    linked_files: list[str],
+) -> None:
+    target = merged_dir / entry.relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    rel_posix = entry.relative_path.as_posix()
+    match entry.materialization:
+        case Materialization.PATCH:
+            rendered = render_entry_text(entry)
+            target.write_text(rendered, encoding="utf-8", newline="")
+            if upper_dir is not None and (upper_dir / entry.relative_path).is_file():
+                (upper_dir / entry.relative_path).write_text(
+                    rendered,
+                    encoding="utf-8",
+                    newline="",
+                )
+            copied_hashes[rel_posix] = _sha256_file(target)
+        case Materialization.COPY:
+            if entry.source_path is not None:
+                shutil.copy2(entry.source_path, target)
+                copied_hashes[rel_posix] = _sha256_file(target)
+        case Materialization.SYMLINK:
+            if entry.source_path is not None:
+                _link_readonly(entry.source_path, target)
+                linked_files.append(rel_posix)
+
+
+def _synthesized_dir_for(profile: ResolvedProfile) -> Path:
+    return profile.runtime_dir / _SYNTHESIZED_DIRNAME
 
 
 def _manifest_path_for(profile: ResolvedProfile) -> Path:
@@ -548,12 +683,38 @@ def _prepare_fuse_dirs(
     return upper_dir, work_dir, ephemeral_root
 
 
+def _materialize_patched_files(
+    entries: Sequence[FileEntry],
+    *,
+    target_root: Path,
+    upper_dir: Path | None,
+) -> None:
+    if target_root.exists():
+        shutil.rmtree(target_root)
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    for entry in entries:
+        rendered = render_entry_text(entry)
+        target = target_root / entry.relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(rendered, encoding="utf-8", newline="")
+        if upper_dir is not None and (upper_dir / entry.relative_path).is_file():
+            (upper_dir / entry.relative_path).write_text(
+                rendered,
+                encoding="utf-8",
+                newline="",
+            )
+
+
 def _cleanup_fuse_dirs(
     merged_dir: Path,
     ephemeral_root: Path | None,
+    synthesized_dir: Path | None = None,
 ) -> None:
     if ephemeral_root is not None and ephemeral_root.exists():
         shutil.rmtree(ephemeral_root, ignore_errors=True)
+    if synthesized_dir is not None and synthesized_dir.exists():
+        shutil.rmtree(synthesized_dir, ignore_errors=True)
     with suppress(OSError):
         merged_dir.rmdir()
 
@@ -624,40 +785,9 @@ def _read_staging_manifest(path: Path) -> _StagingManifest:
     except (OSError, json.JSONDecodeError) as exc:
         raise OverlayError.corrupt_manifest(path, str(exc)) from exc
 
-    if not isinstance(raw, dict):
+    if not isinstance(raw, Mapping):
         raise OverlayError.invalid_manifest_schema(path)
-
-    persist_state = raw.get("persist_state")
-    upper_raw = raw.get("upper_dir")
-    copied_raw = raw.get("copied_hashes")
-    linked_raw = raw.get("linked_files", [])
-    if (
-        not isinstance(persist_state, bool)
-        or not isinstance(copied_raw, dict)
-        or not isinstance(linked_raw, list)
-    ):
-        raise OverlayError.invalid_manifest_schema(path)
-    if upper_raw is not None and not isinstance(upper_raw, str):
-        raise OverlayError.invalid_manifest_schema(path)
-
-    copied_hashes: dict[str, str] = {}
-    for key, value in copied_raw.items():
-        if not isinstance(key, str) or not isinstance(value, str):
-            raise OverlayError.invalid_manifest_schema(path)
-        copied_hashes[key] = value
-
-    linked_files: set[str] = set()
-    for item in linked_raw:
-        if not isinstance(item, str):
-            raise OverlayError.invalid_manifest_schema(path)
-        linked_files.add(item)
-
-    return _StagingManifest(
-        persist_state=persist_state,
-        upper_dir=Path(upper_raw) if upper_raw is not None else None,
-        copied_hashes=frozendict(copied_hashes),
-        linked_files=frozenset(linked_files),
-    )
+    return _StagingManifest.from_dict(raw, source_path=path)
 
 
 def _sync_staged_changes(

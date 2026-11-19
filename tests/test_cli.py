@@ -14,7 +14,10 @@ def _setup_project(tmp_path: Path) -> Path:
     layer_dir = project_dir / "overlays" / "custom"
     layer_dir.mkdir(parents=True)
 
-    (base_dir / "RA2MO.ini").write_text("Speed=1\n", encoding="utf-8")
+    (base_dir / "RA2MO.ini").write_text(
+        "[Options]\nSpeed=1\n",
+        encoding="utf-8",
+    )
     (base_dir / "ddraw.dll").write_bytes(b"base-ddraw")
     (base_dir / "mock.py").write_text(
         "from pathlib import Path\n"
@@ -23,7 +26,10 @@ def _setup_project(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (layer_dir / "ddraw.dll").write_bytes(b"custom-ddraw")
-    (layer_dir / "ddraw.ini").write_text("[ddraw]\n", encoding="utf-8")
+    (layer_dir / "RA2MO.ini.patch.ini").write_text(
+        "[Options]\nSpeed=5\n",
+        encoding="utf-8",
+    )
 
     config_path = project_dir / "mentara.toml"
     config_path.write_text(
@@ -47,7 +53,7 @@ layers = ["overlays/custom"]
     return config_path
 
 
-def test_cli_profiles_inspect_and_dry_run(tmp_path: Path) -> None:
+def test_cli_profiles_inspect_render_and_dry_run(tmp_path: Path) -> None:
     config_path = _setup_project(tmp_path)
 
     out = io.StringIO()
@@ -80,6 +86,23 @@ def test_cli_profiles_inspect_and_dry_run(tmp_path: Path) -> None:
     out = io.StringIO()
     assert (
         main(
+            [
+                "-c",
+                str(config_path),
+                "inspect",
+                "--render",
+                "RA2MO.ini",
+            ],
+            stdout=out,
+            stderr=err,
+        )
+        == 0
+    )
+    assert "Speed=5" in out.getvalue()
+
+    out = io.StringIO()
+    assert (
+        main(
             ["-c", str(config_path), "launch", "--dry-run"],
             stdout=out,
             stderr=err,
@@ -91,28 +114,22 @@ def test_cli_profiles_inspect_and_dry_run(tmp_path: Path) -> None:
     assert "mock.py" in out.getvalue()
 
 
-def test_cli_mount_unmount_launch_and_init_layer(tmp_path: Path) -> None:
+def test_cli_mount_unmount_launch_and_clean(tmp_path: Path) -> None:
     config_path = _setup_project(tmp_path)
-
     out = io.StringIO()
     err = io.StringIO()
-    assert (
-        main(
-            ["-c", str(config_path), "init-layer", "phobos"],
-            stdout=out,
-            stderr=err,
-        )
-        == 0
-    )
-    assert (config_path.parent / "overlays" / "phobos" / ".gitkeep").is_file()
 
     # Manual mount and unmount round-trip.
-    out = io.StringIO()
     assert main(["-c", str(config_path), "mount"], stdout=out, stderr=err) == 0
     merged = tmp_path / "runtime" / "default" / "merged"
     assert (merged / "ddraw.dll").read_bytes() == b"custom-ddraw"
 
+    # Cleaning while mounted is refused.
+    assert main(["-c", str(config_path), "clean"], stdout=out, stderr=err) == 1
+    assert "already active" in err.getvalue()
+
     out = io.StringIO()
+    err = io.StringIO()
     assert main(["-c", str(config_path), "unmount"], stdout=out, stderr=err) == 0
     assert not merged.exists()
 
@@ -122,6 +139,12 @@ def test_cli_mount_unmount_launch_and_init_layer(tmp_path: Path) -> None:
     assert not merged.exists()
     persisted = tmp_path / "state" / "default" / "upper" / "ran.log"
     assert persisted.read_text(encoding="utf-8") == "custom-ddraw"
+
+    # Clean removes persisted state.
+    out = io.StringIO()
+    assert main(["-c", str(config_path), "clean"], stdout=out, stderr=err) == 0
+    assert not persisted.exists()
+    assert "Removed" in out.getvalue()
 
 
 def test_cli_returns_nonzero_on_unknown_profile(tmp_path: Path) -> None:
@@ -151,7 +174,7 @@ def test_cli_inspect_text_and_doctor(tmp_path: Path) -> None:
         )
         == 0
     )
-    assert "ddraw.ini" in out.getvalue()
+    assert "RA2MO.ini" in out.getvalue()
     assert "ddraw.dll" not in out.getvalue()
 
     out = io.StringIO()

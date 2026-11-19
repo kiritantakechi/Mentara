@@ -10,6 +10,7 @@ from mentara.planner import (
     LayerSource,
     Materialization,
     build_overlay_plan,
+    render_entry_text,
 )
 
 
@@ -123,3 +124,54 @@ def test_build_overlay_plan_raises_on_missing_required_layer(
         build_overlay_plan(
             (LayerSource("layer:missing", missing, EntryOrigin.LAYER),),
         )
+
+
+def test_build_overlay_plan_composes_patches_across_layers_and_state(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base"
+    layer_one = tmp_path / "layer1"
+    layer_two = tmp_path / "layer2"
+    state = tmp_path / "state"
+    for directory in (base, layer_one, layer_two, state):
+        directory.mkdir()
+
+    (base / "RA2MO.ini").write_text(
+        "[Options]\r\nGameSpeed=1\r\nDifficulty=2\r\n",
+        encoding="utf-8",
+        newline="",
+    )
+    (layer_one / "RA2MO.ini.patch.ini").write_text(
+        "[Options]\nGameSpeed=4\nToolTips=yes\n",
+        encoding="utf-8",
+    )
+    (layer_two / "RA2MO.ini.patch.ini").write_text(
+        "[Options]\n!Difficulty\n[Video]\nScreenWidth=1920\n",
+        encoding="utf-8",
+    )
+    # Runtime state modifies Volume; patches still apply on top.
+    (state / "RA2MO.ini").write_text(
+        "[Options]\r\nGameSpeed=1\r\nDifficulty=2\r\n[Audio]\r\nClientVolume=8\r\n",
+        encoding="utf-8",
+        newline="",
+    )
+
+    plan = build_overlay_plan(
+        (
+            LayerSource("base", base, EntryOrigin.BASE),
+            LayerSource("layer:one", layer_one, EntryOrigin.LAYER),
+            LayerSource("layer:two", layer_two, EntryOrigin.LAYER),
+            LayerSource("state", state, EntryOrigin.STATE),
+        ),
+    )
+
+    entry = plan.lookup_case_insensitive(Path("RA2MO.ini"))
+    assert entry is not None
+    assert entry.materialization is Materialization.PATCH
+    assert len(entry.patches) == 2
+    rendered = render_entry_text(entry)
+    assert "GameSpeed=4\r\n" in rendered
+    assert "ToolTips=yes\r\n" in rendered
+    assert "Difficulty" not in rendered
+    assert "ClientVolume=8\r\n" in rendered
+    assert "[Video]\r\nScreenWidth=1920\r\n" in rendered

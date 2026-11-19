@@ -44,6 +44,11 @@ def _make_profile(
 
     layer_b.mkdir(parents=True)
     (layer_b / "Phobos.dll").write_bytes(b"phobos-dll")
+    (layer_b / "INI").mkdir(parents=True)
+    (layer_b / "INI" / "base.ini.patch.ini").write_text(
+        "[Patched]\nAddedKey=42\n",
+        encoding="utf-8",
+    )
 
     config = MentaraConfig(
         base_dir=str(base_dir),
@@ -78,6 +83,7 @@ def test_symlink_backend_decouples_writes_and_persists_state(
     assert (merged / "Phobos.dll").read_bytes() == b"phobos-dll"
     assert not (merged / "RA2MO.ini").is_symlink()
     assert (merged / "INI" / "base.ini").exists()
+    assert "AddedKey=42" in (merged / "INI" / "base.ini").read_text(encoding="utf-8")
     assert (merged / "INI" / "extra.ini").exists()
 
     # Simulate game editing INI, saving a file, and replacing a DLL.
@@ -246,15 +252,21 @@ def test_fuse_backend_builds_reversed_lowerdir_and_unmounts(
     assert backend.is_mounted(profile)
     mount_cmd = calls[0]
     assert mount_cmd[0] == "/usr/bin/fuse-overlayfs"
+    synthesized = profile.runtime_dir / "synthesized"
     expected_lower = (
-        f"lowerdir={profile.layers[1]}:{profile.layers[0]}:{profile.base_dir},"
+        f"lowerdir={synthesized}:{profile.layers[1]}:"
+        f"{profile.layers[0]}:{profile.base_dir},"
         f"upperdir={profile.state_dir / 'upper'},"
         f"workdir={profile.state_dir / 'work'}"
     )
     assert mount_cmd[2] == expected_lower
+    assert "AddedKey=42" in (synthesized / "INI" / "base.ini").read_text(
+        encoding="utf-8"
+    )
 
     backend.unmount(profile, workspace)
     assert not backend.is_mounted(profile)
+    assert not synthesized.exists()
     assert len(calls) == 3
 
     mounted = True

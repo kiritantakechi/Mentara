@@ -34,15 +34,15 @@ mount profile="default" *args:
 unmount profile="default" *args:
     uv run mentara unmount --profile {{ profile }} {{ args }}
 
-# Inspect resolved overlay files, shadowed layers, and case collisions.
+# Remove persisted writable runtime state for a profile.
+[group("launcher")]
+clean profile="default" *args:
+    uv run mentara clean --profile {{ profile }} {{ args }}
+
+# Inspect resolved overlay files, patches, and case collisions.
 [group("launcher")]
 inspect profile="default" *args:
     uv run mentara inspect --profile {{ profile }} {{ args }}
-
-# Inspect only INI and DLL overrides across layers.
-[group("launcher")]
-inspect-ini-dll profile="default":
-    uv run mentara inspect --profile {{ profile }} --filter '*.ini' --filter '*.dll'
 
 # List all profiles declared in mentara.toml.
 [group("launcher")]
@@ -53,11 +53,6 @@ profiles:
 [group("launcher")]
 doctor profile="default" *args:
     uv run mentara doctor --profile {{ profile }} {{ args }}
-
-# Create a new overlay layer scaffold under overlays/.
-[group("launcher")]
-init-layer name:
-    uv run mentara init-layer {{ name }}
 
 # Format justfile, Python source, and tests.
 [group("dev")]

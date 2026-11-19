@@ -20,14 +20,15 @@ from mentara.config import (
     resolve_profile,
 )
 from mentara.doctor import run_doctor
-from mentara.errors import ConfigError, MentaraError
+from mentara.errors import MentaraError, OverlayError
 from mentara.overlay import (
     MountedWorkspace,
     activate_workspace,
+    clean_state,
     get_backend,
     plan_profile,
 )
-from mentara.planner import matches_any_pattern
+from mentara.planner import matches_any_pattern, render_entry_text
 from mentara.runner import build_launch_spec, execute_launch
 
 __all__ = ["build_parser", "main"]
@@ -104,9 +105,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use lazy FUSE unmount (fusermount3 -uz) if busy.",
     )
 
+    clean_parser = subparsers.add_parser(
+        "clean",
+        help="Remove persisted runtime state for a profile.",
+    )
+    _add_profile_flags(clean_parser)
+
     inspect_parser = subparsers.add_parser(
         "inspect",
-        help="Inspect resolved overlay files, shadows, and collisions.",
+        help="Inspect resolved overlay files, patches, and collisions.",
     )
     _add_profile_flags(inspect_parser)
     inspect_parser.add_argument(
@@ -116,6 +123,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         dest="filters",
         help="Glob filter (repeatable, e.g. -f '*.ini' -f '*.dll').",
+    )
+    inspect_parser.add_argument(
+        "--render",
+        default=None,
+        metavar="REL_PATH",
+        help="Render the final merged text of a virtual file to stdout.",
     )
     inspect_parser.add_argument(
         "--all",
@@ -140,22 +153,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check host tools, base files, layers, and MO pitfalls.",
     )
     _add_profile_flags(doctor_parser)
-
-    init_layer_parser = subparsers.add_parser(
-        "init-layer",
-        help="Create a new overlay layer folder scaffold.",
-    )
-    init_layer_parser.add_argument(
-        "name",
-        help="Layer directory name (e.g. 'phobos' or 'balance-patch').",
-    )
-    init_layer_parser.add_argument(
-        "--dir",
-        type=Path,
-        default=None,
-        dest="parent_dir",
-        help="Parent directory for layers (defaults to <config_dir>/overlays).",
-    )
 
     return parser
 
@@ -241,11 +238,9 @@ def _dispatch(
 
     match subcommand:
         case "profiles":
-            exit_code = _cmd_profiles(config, config_dir=config_dir, stdout=stdout)
-        case "init-layer":
-            exit_code = _cmd_init_layer(
-                name=str(args.name),
-                parent_dir=args.parent_dir or (config_dir / "overlays"),
+            exit_code = _cmd_profiles(
+                config,
+                config_dir=config_dir,
                 stdout=stdout,
             )
         case "launch":
@@ -275,15 +270,25 @@ def _dispatch(
                 lazy=bool(args.lazy),
                 stdout=stdout,
             )
+        case "clean":
+            profile = _resolve_from_args(config, config_dir, args)
+            exit_code = _cmd_clean(profile, stdout=stdout)
         case "inspect":
             profile = _resolve_from_args(config, config_dir, args)
-            exit_code = _cmd_inspect(
-                profile,
-                filters=tuple(args.filters),
-                show_all=bool(args.show_all),
-                as_json=bool(args.as_json),
-                stdout=stdout,
-            )
+            if args.render is not None:
+                exit_code = _cmd_render(
+                    profile,
+                    target=str(args.render),
+                    stdout=stdout,
+                )
+            else:
+                exit_code = _cmd_inspect(
+                    profile,
+                    filters=tuple(args.filters),
+                    show_all=bool(args.show_all),
+                    as_json=bool(args.as_json),
+                    stdout=stdout,
+                )
         case "doctor":
             profile = _resolve_from_args(config, config_dir, args)
             exit_code = _cmd_doctor(profile, stdout=stdout, stderr=stderr)
@@ -336,23 +341,6 @@ def _cmd_profiles(
             f"exe={resolved.runner.executable} layers=[{layers}]{desc}\n"
         )
     stdout.write("".join(lines))
-    return _EXIT_OK
-
-
-def _cmd_init_layer(
-    *,
-    name: str,
-    parent_dir: Path,
-    stdout: TextIO,
-) -> int:
-    if not name or name in {".", ".."} or "/" in name or "\\" in name:
-        raise ConfigError.invalid_layer_name(name)
-
-    target = parent_dir.expanduser().resolve() / name
-    target.mkdir(parents=True, exist_ok=True)
-    (target / ".gitkeep").touch(exist_ok=True)
-
-    stdout.write(f"Created overlay layer directory: {target}\n")
     return _EXIT_OK
 
 
@@ -427,10 +415,32 @@ def _cmd_unmount(
     return _EXIT_OK
 
 
+def _cmd_clean(profile: ResolvedProfile, *, stdout: TextIO) -> int:
+    removed = clean_state(profile)
+    status = "Removed" if removed else "No persisted state at"
+    stdout.write(f"{status} {profile.state_dir}\n")
+    return _EXIT_OK
+
+
+def _cmd_render(
+    profile: ResolvedProfile,
+    *,
+    target: str,
+    stdout: TextIO,
+) -> int:
+    plan = plan_profile(profile)
+    entry = plan.lookup_case_insensitive(Path(target))
+    if entry is None:
+        role = "virtual file"
+        raise OverlayError.missing_directory(role, Path(target))
+    stdout.write(render_entry_text(entry))
+    return _EXIT_OK
+
+
 def _cmd_inspect(
     profile: ResolvedProfile,
     *,
-    filters: tuple[str, ...],
+    filters: Sequence[str],
     show_all: bool,
     as_json: bool,
     stdout: TextIO,
@@ -460,6 +470,14 @@ def _cmd_inspect(
                     "layer": entry.layer_label,
                     "materialization": entry.materialization.value,
                     "shadowed_from": list(entry.shadowed_from),
+                    "patches": [
+                        {
+                            "kind": spec.kind.value,
+                            "layer": spec.layer_label,
+                            "source": spec.source_path.name,
+                        }
+                        for spec in entry.patches
+                    ],
                 }
                 for entry in selected
             ],
@@ -487,9 +505,18 @@ def _cmd_inspect(
             if entry.shadowed_from
             else ""
         )
+        patch_note = (
+            " [patches: "
+            + ", ".join(
+                f"{spec.layer_label}:{spec.source_path.name}" for spec in entry.patches
+            )
+            + "]"
+            if entry.patches
+            else ""
+        )
         lines.append(
             f"  [{entry.layer_label}] [{entry.materialization.value}] "
-            f"{entry.relative_path.as_posix()}{shadow}"
+            f"{entry.relative_path.as_posix()}{shadow}{patch_note}"
         )
     if plan.case_collisions:
         lines.append("Case collisions:")

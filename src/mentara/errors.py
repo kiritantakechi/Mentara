@@ -130,18 +130,6 @@ class ConfigError(MentaraError):
         """
         return cls(f"Overlay layer must not equal base_dir: {layer}")
 
-    @classmethod
-    def invalid_layer_name(cls, name: str) -> Self:
-        """Build an error for an unsafe overlay layer name.
-
-        Args:
-            name: Layer name supplied by the user.
-
-        Returns:
-            A `ConfigError` describing the naming rule.
-        """
-        return cls(f"Invalid layer name {name!r}: must be a single path segment")
-
 
 class OverlayError(MentaraError):
     """Raised when resolving or materialising an overlay fails."""
@@ -219,6 +207,39 @@ class OverlayError(MentaraError):
             An `OverlayError` describing the schema mismatch.
         """
         return cls(f"Staging manifest has invalid schema: {path}")
+
+    @classmethod
+    def invalid_patch(cls, path: Path, detail: str) -> Self:
+        """Build an error when a text or INI patch file is malformed.
+
+        Args:
+            path: Patch file path.
+            detail: Syntax or schema failure description.
+
+        Returns:
+            An `OverlayError` describing the invalid patch.
+        """
+        return cls(f"Invalid overlay patch {path}: {detail}")
+
+    @classmethod
+    def patch_target_not_found(
+        cls,
+        patch_path: Path,
+        target_snippet: str,
+    ) -> Self:
+        """Build an error when a required replacement anchor is absent.
+
+        Args:
+            patch_path: Patch file that requested the edit.
+            target_snippet: Missing target or anchor text.
+
+        Returns:
+            An `OverlayError` naming the missing target text.
+        """
+        return cls(
+            f"Patch {patch_path} failed: target text {target_snippet!r} "
+            "was not found in base file"
+        )
 
 
 class MountError(OverlayError):

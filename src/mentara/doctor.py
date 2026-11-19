@@ -11,7 +11,12 @@ from pathlib import Path
 from mentara.config import BackendKind, PlatformKind, ResolvedProfile
 from mentara.errors import OverlayError
 from mentara.overlay import plan_profile
-from mentara.planner import EntryOrigin, OverlayPlan
+from mentara.planner import (
+    EntryOrigin,
+    FileEntry,
+    OverlayPlan,
+    render_entry_text,
+)
 from mentara.runner import extract_command_binaries
 
 __all__ = [
@@ -100,6 +105,7 @@ def run_doctor(profile: ResolvedProfile) -> DoctorReport:
     _check_core_files(plan, diagnostics)
     _check_target_executable(profile, plan, diagnostics)
     _check_case_collisions(plan, diagnostics)
+    _check_patches(plan, diagnostics)
     _check_forbidden_files(profile, plan, diagnostics)
     _check_syringeex_client_defs(profile, plan, diagnostics)
 
@@ -354,6 +360,36 @@ def _check_case_collisions(
         )
 
 
+def _check_patches(
+    plan: OverlayPlan,
+    diagnostics: list[Diagnostic],
+) -> None:
+    patched = plan.patched_entries()
+    if not patched:
+        return
+
+    for entry in patched:
+        try:
+            _ = render_entry_text(entry)
+        except OverlayError as exc:
+            diagnostics.append(
+                Diagnostic(
+                    "patches",
+                    Severity.ERROR,
+                    str(exc),
+                ),
+            )
+            return
+
+    diagnostics.append(
+        Diagnostic(
+            "patches",
+            Severity.OK,
+            f"All {len(patched)} text-patched file(s) validated cleanly.",
+        ),
+    )
+
+
 def _check_forbidden_files(
     profile: ResolvedProfile,
     plan: OverlayPlan,
@@ -366,7 +402,7 @@ def _check_forbidden_files(
     if client_defs is None:
         return
 
-    forbidden = _read_forbidden_files(client_defs.source_path)
+    forbidden = _read_forbidden_files(client_defs)
     if not forbidden:
         return
 
@@ -400,12 +436,12 @@ def _check_syringeex_client_defs(
 
     syringe = plan.lookup_case_insensitive(Path("Syringe.exe"))
     client_defs = plan.lookup_case_insensitive(_CLIENT_DEFINITIONS_PATH)
-    if syringe is None or client_defs is None:
+    if syringe is None or syringe.source_path is None or client_defs is None:
         return
     if not _is_syringeex_binary(syringe.source_path):
         return
 
-    parser = _parse_ini(client_defs.source_path)
+    parser = _parse_ini_entry(client_defs)
     if parser is None:
         return
 
@@ -450,18 +486,18 @@ def _is_syringeex_binary(path: Path) -> bool:
     return b"SyringeEx" in data
 
 
-def _read_forbidden_files(path: Path) -> frozenset[str]:
-    parser = _parse_ini(path)
+def _read_forbidden_files(entry: FileEntry) -> frozenset[str]:
+    parser = _parse_ini_entry(entry)
     if parser is None:
         return frozenset()
     raw = parser.get("Settings", "ForbiddenFiles", fallback="")
     return frozenset(item.strip().casefold() for item in raw.split(",") if item.strip())
 
 
-def _parse_ini(path: Path) -> ConfigParser | None:
+def _parse_ini_entry(entry: FileEntry) -> ConfigParser | None:
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        text = render_entry_text(entry)
+    except OverlayError:
         return None
 
     parser = ConfigParser(interpolation=None, strict=False)

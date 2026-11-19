@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
+lazy from collections.abc import Sequence
 
 from pydantic import (
     BaseModel,
@@ -25,7 +26,6 @@ __all__ = [
     "MentaraConfig",
     "PlatformConfig",
     "PlatformKind",
-    "PlatformOverrideConfig",
     "ProfileConfig",
     "ProfileOverrides",
     "ResolvedProfile",
@@ -72,7 +72,7 @@ class BackendKind(StrEnum):
 
 
 class RunnerConfig(BaseModel):
-    """Default launcher runtime command and environment settings."""
+    """Base launcher runtime command and environment settings."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -108,22 +108,13 @@ class RunnerOverrideConfig(BaseModel):
 
 
 class PlatformConfig(BaseModel):
-    """Host-platform defaults for backend, storage roots, and runner."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    backend: BackendKind
-    runtime_dir: str | None = None
-    state_dir: str | None = None
-    runner: RunnerConfig = Field(default_factory=RunnerConfig)
-
-
-class PlatformOverrideConfig(BaseModel):
-    """Per-profile, per-platform overrides for backend and runner."""
+    """Symmetric platform overrides for `[linux]` and `[windows]`."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     backend: BackendKind | None = None
+    runtime_dir: str | None = None
+    state_dir: str | None = None
     runner: RunnerOverrideConfig | None = None
 
 
@@ -135,49 +126,28 @@ class ProfileConfig(BaseModel):
     description: str = ""
     layers: tuple[str, ...] = ()
     backend: BackendKind | None = None
+    runtime_dir: str | None = None
+    state_dir: str | None = None
     persist_state: bool = True
     copy_patterns: tuple[str, ...] | None = None
     runner: RunnerOverrideConfig | None = None
-    linux: PlatformOverrideConfig | None = None
-    windows: PlatformOverrideConfig | None = None
+    linux: PlatformConfig | None = None
+    windows: PlatformConfig | None = None
 
-    def platform_override(
-        self,
-        platform: PlatformKind,
-    ) -> PlatformOverrideConfig | None:
-        """Return the platform-specific override section for `platform`.
+    def for_platform(self, platform: PlatformKind) -> PlatformConfig | None:
+        """Return the platform-specific section for `platform`.
 
         Args:
             platform: Target host platform.
 
         Returns:
-            Matching `PlatformOverrideConfig`, or `None`.
+            Matching `PlatformConfig`, or `None`.
         """
         match platform:
             case PlatformKind.LINUX:
                 return self.linux
             case PlatformKind.WINDOWS:
                 return self.windows
-
-
-def _default_linux_platform() -> PlatformConfig:
-    return PlatformConfig(
-        backend=BackendKind.FUSE_OVERLAYFS,
-        runner=RunnerConfig(
-            command=("umu-run",),
-            executable="MentalOmegaClient.exe",
-        ),
-    )
-
-
-def _default_windows_platform() -> PlatformConfig:
-    return PlatformConfig(
-        backend=BackendKind.SYMLINK,
-        runner=RunnerConfig(
-            command=(),
-            executable="MentalOmegaClient.exe",
-        ),
-    )
 
 
 class MentaraConfig(BaseModel):
@@ -193,14 +163,14 @@ class MentaraConfig(BaseModel):
     exclude: tuple[str, ...] = DEFAULT_EXCLUDE
     copy_patterns: tuple[str, ...] = DEFAULT_COPY_PATTERNS
     runner: RunnerOverrideConfig | None = None
-    linux: PlatformConfig = Field(default_factory=_default_linux_platform)
-    windows: PlatformConfig = Field(default_factory=_default_windows_platform)
+    linux: PlatformConfig = Field(default_factory=PlatformConfig)
+    windows: PlatformConfig = Field(default_factory=PlatformConfig)
     profiles: dict[str, ProfileConfig] = Field(
         default_factory=lambda: {"default": ProfileConfig()},
     )
 
-    def platform_config(self, platform: PlatformKind) -> PlatformConfig:
-        """Return the base configuration table for `platform`.
+    def for_platform(self, platform: PlatformKind) -> PlatformConfig:
+        """Return the top-level platform table for `platform`.
 
         Args:
             platform: Target host platform.
@@ -340,6 +310,12 @@ def resolve_profile(
 ) -> ResolvedProfile:
     """Resolve a profile into concrete paths for a target platform.
 
+    Resolution precedence (lowest to highest):
+    1. Built-in defaults for `platform`.
+    2. Top-level `config` and `config.<platform>`.
+    3. `profile` and `profile.<platform>`.
+    4. Command-line `overrides`.
+
     Args:
         config: Validated top-level configuration.
         config_dir: Directory containing `mentara.toml`.
@@ -359,8 +335,8 @@ def resolve_profile(
         raise ConfigError.unknown_profile(chosen_name, tuple(config.profiles))
 
     active_platform = PlatformKind.current() if platform is None else platform
-    plat_cfg = config.platform_config(active_platform)
-    plat_prof_override = profile.platform_override(active_platform)
+    global_plat = config.for_platform(active_platform)
+    profile_plat = profile.for_platform(active_platform)
     applied = ProfileOverrides() if overrides is None else overrides
 
     resolved_config_dir = config_dir.expanduser().resolve()
@@ -371,16 +347,30 @@ def resolve_profile(
         base_dir=base_dir,
     )
 
-    raw_runtime = plat_cfg.runtime_dir or config.runtime_dir
-    raw_state = plat_cfg.state_dir or config.state_dir
+    raw_runtime = _first_non_empty(
+        (
+            profile_plat.runtime_dir if profile_plat is not None else None,
+            profile.runtime_dir,
+            global_plat.runtime_dir,
+            config.runtime_dir,
+        )
+    )
+    raw_state = _first_non_empty(
+        (
+            profile_plat.state_dir if profile_plat is not None else None,
+            profile.state_dir,
+            global_plat.state_dir,
+            config.state_dir,
+        )
+    )
     runtime_root = (
         _resolve_path(raw_runtime, anchor=resolved_config_dir)
-        if raw_runtime is not None and raw_runtime != ""
+        if raw_runtime is not None
         else _default_runtime_root(active_platform)
     )
     state_root = (
         _resolve_path(raw_state, anchor=resolved_config_dir)
-        if raw_state is not None and raw_state != ""
+        if raw_state is not None
         else _default_state_root(active_platform)
     )
     runtime_dir = runtime_root / chosen_name
@@ -394,21 +384,23 @@ def resolve_profile(
     )
 
     runner = _merge_runner_chain(
-        base=plat_cfg.runner,
+        base=_default_runner_for(active_platform),
         overrides=(
             config.runner,
+            global_plat.runner,
             profile.runner,
-            plat_prof_override.runner if plat_prof_override is not None else None,
+            profile_plat.runner if profile_plat is not None else None,
         ),
         executable_override=applied.executable,
         extra_args=applied.extra_args,
     )
     backend = (
         applied.backend
-        or (plat_prof_override.backend if plat_prof_override is not None else None)
+        or (profile_plat.backend if profile_plat is not None else None)
         or profile.backend
+        or global_plat.backend
         or config.backend
-        or plat_cfg.backend
+        or _default_backend_for(active_platform)
     )
     copy_patterns = (
         profile.copy_patterns
@@ -433,6 +425,35 @@ def resolve_profile(
     )
 
 
+def _default_backend_for(platform: PlatformKind) -> BackendKind:
+    match platform:
+        case PlatformKind.LINUX:
+            return BackendKind.FUSE_OVERLAYFS
+        case PlatformKind.WINDOWS:
+            return BackendKind.SYMLINK
+
+
+def _default_runner_for(platform: PlatformKind) -> RunnerConfig:
+    match platform:
+        case PlatformKind.LINUX:
+            return RunnerConfig(
+                command=("umu-run",),
+                executable="MentalOmegaClient.exe",
+            )
+        case PlatformKind.WINDOWS:
+            return RunnerConfig(
+                command=(),
+                executable="MentalOmegaClient.exe",
+            )
+
+
+def _first_non_empty(candidates: Sequence[str | None]) -> str | None:
+    for item in candidates:
+        if item is not None and item != "":
+            return item
+    return None
+
+
 def _validate_slug(name: str) -> None:
     if not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:
         msg = f"Profile name {name!r} must be a non-empty single path segment"
@@ -447,7 +468,7 @@ def _resolve_path(raw: str, *, anchor: Path) -> Path:
 
 
 def _resolve_layers(
-    raw_layers: tuple[str, ...],
+    raw_layers: Sequence[str],
     *,
     anchor: Path,
     base_dir: Path,
@@ -499,7 +520,7 @@ def _ensure_disjoint_workspace(
     runtime_dir: Path,
     state_dir: Path,
     base_dir: Path,
-    layers: tuple[Path, ...],
+    layers: Sequence[Path],
 ) -> None:
     if _paths_overlap(runtime_dir, state_dir):
         runtime_role = "runtime_dir"
@@ -535,9 +556,9 @@ def _paths_overlap(first: Path, second: Path) -> bool:
 def _merge_runner_chain(
     *,
     base: RunnerConfig,
-    overrides: tuple[RunnerOverrideConfig | None, ...],
+    overrides: Sequence[RunnerOverrideConfig | None],
     executable_override: str | None,
-    extra_args: tuple[str, ...],
+    extra_args: Sequence[str],
 ) -> ResolvedRunner:
     command = base.command
     executable = base.executable

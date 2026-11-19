@@ -5,7 +5,10 @@
 Mentara 在启动游戏时自动维护一个与原版游戏目录解耦的虚拟工作目录，将只读的原游戏目录、多个有序自定义叠层（INI、DLL、资源包等）与独立的可写状态层合成为统一视图：
 
 - **原文件零污染**：游戏本体目录与自定义叠层目录均保持只读干净状态。
-- **INI / DLL 透明读取**：`MentalOmegaClient.exe`、`Syringe.exe`、`gamemd.exe` 以及 Ares/Phobos 等 DLL 在虚拟目录中按叠层优先级无缝读取。
+- **文件级 + 文本条目级正交叠层**：
+  - 整文件覆盖（`.dll`、`.mix`、`.ini`）与文本级补丁（`.patch.ini`、`.patch.toml`）职责完全正交，可跨多层按序组合。
+  - **`<target>.patch.ini`（INI 条目级）**：原生 Westwood INI 语法，`Key=Value` 原地修改或新增、`!Key` 删除键、`[-Section]` 删除整节、`+=Value` 自动按当前节最大数字键 `+1` 追加，完整保留底层文件注释与 CRLF 换行。
+  - **`<target>.patch.toml`（通用明文行/块级）**：`[[text]]` 对称操作集（`replace`、`insert_before` / `insert_after`、`prepend` / `append`、`delete_lines`），适用于 `.cfg`、`.config`、`.txt` 等任意明文。
 - **Linux 与 Windows 对称设计**：
   - `[linux]` 与 `[windows]` 采用完全一致的 `PlatformConfig` 结构（`backend`、`runtime_dir`、`state_dir`、`runner`），同一份 `mentara.toml` 与 Profile 可在双平台直接运行。
   - **Linux**：默认使用 `fuse-overlayfs` 零复制联合挂载，通过 `gamescope ... -- umu-run` 链式启动，挂载点与状态层分别位于 `$XDG_CACHE_HOME/mentara/runtime` 与 `$XDG_STATE_HOME/mentara`。
@@ -23,8 +26,10 @@ just doctor                     # 检查当前平台环境、核心游戏文件�
 just profiles                   # 列出所有已配置 Profile 及当前平台后端
 just dry-run                    # 预览虚拟目录挂载方案与最终启动命令
 just launch                     # 自动挂载 -> 启动游戏 -> 退出自动卸载
-just launch syringe             # 使用 Syringe.exe 直连 Profile
-just launch default --backend symlink  # 临时切换虚拟目录后端
+just mount                      # 手动挂载虚拟目录
+just unmount                    # 手动卸载虚拟目录
+just clean                      # 清理指定 Profile 的持久化运行状态层
+just inspect                    # 查看叠层文件、补丁链或通过 --render 预览合成后文本
 ```
 
 ## 平台与叠层配置 (`mentara.toml`)
