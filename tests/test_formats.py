@@ -1,5 +1,6 @@
 """Tests for the palette, indexed PNG, SHP and CSF codecs."""
 
+import struct
 import zlib
 
 import pytest
@@ -70,6 +71,30 @@ def test_shp_round_trips_with_rle_zero_frames() -> None:
     assert {data[8 + 24 * i + 8] for i in range(2)} == {3}
     with pytest.raises(AssetError, match="frame 1 has 5 pixels"):
         ShpImage(3, 2, (bytes(6), bytes(5)))
+
+
+def test_shp_decodes_raw_scanline_and_empty_frames() -> None:
+    # A 3x2 canvas: a raw 2x1 frame at (1, 1), length-prefixed rows, and
+    # a frame with no pixels.
+    frame = struct.Struct("<4HB3x4BII")
+    header = struct.pack("<4H", 0, 3, 2, 3)
+    bodies_at = 8 + frame.size * 3
+    raw = bytes((7, 8))
+    rows = b"".join(struct.pack("<H", 5) + bytes(row) for row in ((1, 2, 3), (4, 5, 6)))
+    data = (
+        header
+        + frame.pack(1, 1, 2, 1, 0, 0, 0, 0, 0, 0, bodies_at)
+        + frame.pack(0, 0, 3, 2, 2, 0, 0, 0, 0, 0, bodies_at + len(raw))
+        + frame.pack(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        + raw
+        + rows
+    )
+
+    assert decode_shp(data).frames == (
+        bytes((0, 0, 0, 0, 7, 8)),
+        bytes((1, 2, 3, 4, 5, 6)),
+        bytes(6),
+    )
 
 
 def test_csf_round_trips_unicode_and_empty_strings() -> None:

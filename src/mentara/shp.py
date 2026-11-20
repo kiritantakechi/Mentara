@@ -27,8 +27,11 @@ _RUN_MAX: Final[int] = 255
 
 
 class _Compression(IntEnum):
-    EMPTY = 0
-    RAW = 1
+    # Bit 1 prefixes each row with its byte length; both bits together
+    # also run-length encode the zeros. 0 and 1 are both plain rows.
+    RAW = 0
+    RAW_ALT = 1
+    SCANLINES = 2
     RLE_ZERO = 3
 
 
@@ -86,7 +89,7 @@ def decode_shp(data: bytes) -> ShpImage:
     """Decode an SHP into full-canvas frames.
 
     Args:
-        data: SHP file bytes using compression 0, 1 or 3.
+        data: SHP file bytes using compression 0 to 3.
 
     Returns:
         Every frame placed on the shared canvas.
@@ -137,18 +140,19 @@ def _decode_frame(
 ) -> bytes:
     left, top, frame_width, frame_height, compression, *_, offset = header
     canvas = bytearray(width * height)
+    if not frame_width or not frame_height:
+        return bytes(canvas)
     match compression:
-        case _Compression.EMPTY:
-            return bytes(canvas)
-        case _Compression.RAW:
+        case _Compression.RAW | _Compression.RAW_ALT:
             rows = [
                 data[start : start + frame_width]
                 for start in range(
                     offset, offset + frame_width * frame_height, frame_width
                 )
             ]
-        case _Compression.RLE_ZERO:
-            rows = _decode_rle_rows(data, offset, frame_width, frame_height)
+        case _Compression.SCANLINES | _Compression.RLE_ZERO:
+            expand = compression == _Compression.RLE_ZERO
+            rows = _decode_rows(data, offset, frame_width, frame_height, expand=expand)
         case _:
             detail = f"unsupported compression {compression}"
             raise AssetError.invalid_format(_FORMAT, detail)
@@ -158,28 +162,35 @@ def _decode_frame(
     return bytes(canvas)
 
 
-def _decode_rle_rows(
+def _decode_rows(
     data: bytes,
     offset: int,
     width: int,
     height: int,
+    *,
+    expand: bool,
 ) -> list[bytes]:
     rows: list[bytes] = []
     for _ in range(height):
         length = int.from_bytes(data[offset : offset + _ROW_LENGTH.size], "little")
         encoded = data[offset + _ROW_LENGTH.size : offset + length]
         offset += length
-        row = bytearray()
-        index = 0
-        while index < len(encoded):
-            if encoded[index]:
-                row.append(encoded[index])
-                index += 1
-            else:
-                row.extend(bytes(encoded[index + 1]))
-                index += 2
+        row = _expand_zero_runs(encoded) if expand else encoded
         if len(row) != width:
             detail = f"row decodes to {len(row)} pixels, expected {width}"
             raise AssetError.invalid_format(_FORMAT, detail)
-        rows.append(bytes(row))
+        rows.append(row)
     return rows
+
+
+def _expand_zero_runs(encoded: bytes) -> bytes:
+    row = bytearray()
+    index = 0
+    while index < len(encoded):
+        if encoded[index]:
+            row.append(encoded[index])
+            index += 1
+        else:
+            row.extend(bytes(encoded[index + 1]))
+            index += 2
+    return bytes(row)
