@@ -76,4 +76,5 @@ just fmt        # ruff format
 just check      # fmt-check + ruff check + ty check + pytest
 just cov        # 带覆盖率运行测试
 just build      # 通过 uv_build 构建发布包
+just hooks      # 用 clang + lld 由 hooks/ 重建 overlays/base/MentaraFixes.dll（Syringe 钩子）
 ```

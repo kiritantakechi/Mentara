@@ -39,6 +39,18 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
       task force.
   - Exact duplicates that change nothing (`FOETF055-G`, `FOETF117-G`,
     `ULTITF60-G`, art `[GAOREFBB]`) are left alone.
+  - **`MentaraFixes.dll`** (Syringe hook DLL built from `hooks/` by
+    `just hooks`; Syringe injects it next to Ares): campaigns crashed under
+    Wine with stock MO (exit `C0000005` at `0x00529A14`). The CnCNet spawner
+    routes every `-SPAWN` game through the scenario reader that loads the
+    multiplayer `[Header]` without resetting it first; campaign maps have no
+    `[Header]`, so the start-point loop ran for whatever the uninitialized
+    count held (leftover UTF-16 text under Wine, about 7.3 million) and ran
+    off the scenario object. The hook skips that block in campaigns at
+    `0x689EB0`, exactly like Phobos's `ScenarioClass_ReadMap_SkipHeaderInCampaign`,
+    so the Ares-only and Phobos stacks behave alike and loading both is
+    harmless. Ares 3.0p1 was tested and does not fix this, so MO keeps its
+    stock Ares 3.0 and stays compatible online.
   - **`expandmo99.mix/artmo.patch.ini`**: seven civilian buildings (`CAWHSE`,
     `CAJHUT`, `CANHSE01/02`, `CAPRSNF`, `CASLUMA`, `CABRKK`) name a `cargo`
     palette that no MO archive ships (all 41 other custom palettes ship every
