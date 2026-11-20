@@ -1,3 +1,0 @@
-# Selection ring, one frame per health condition (see phsel.pal.toml).
-sheet = "phselunt.png"
-frame = [56, 30]

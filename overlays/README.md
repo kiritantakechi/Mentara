@@ -82,8 +82,21 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
   with declarative patches and a small set of generated assets.
   - **HUD design ("quiet, native")**: every Phobos addition should look like it
     shipped with MO. Readouts use MO's fonts and faction colours, appear on
-    hover or selection rather than permanently, and share one colour system:
-    green `118,236,140`, amber `248,208,96`, red `248,100,96`.
+    hover or selection rather than permanently, and share one colour system
+    taken from MO's own health pips (`pips.shp` frames 16-18 in
+    `palette.pal`): green `0,255,0`, yellow `255,215,0`, red `255,0,0`,
+    each with the pip's darker second tone where a shape needs depth. So
+    the bar, the ring, the hover number and the power counter are one
+    colour, and so are Phobos's floating `+$`/`-$` figures, which are
+    hard-coded to the same pure green and red. (`palette.pal`, which the
+    engine draws pips with, has no softer greens, so MO's pips cannot
+    move toward any other tone; MO's icons stay untouched.) Sidebar
+    chrome instead takes each side's own accent from its `sidebar.pal`.
+    - Layers: overhead readouts (bars, numbers, the promotion badge) are
+      UI and may draw over the world; anything on the ground (selection
+      rings, the placement grid) is drawn flat in the depth buffer under
+      units. An anim has a single layer and depth mode, so no anim mixes
+      the two.
     - Credits strip: power surplus (left) and active/total harvesters (right)
       as bare numbers. Their labels are empty because the strip draws in the
       `Metal12` numeral font, which has no CJK glyphs (the old "电"/"矿"
@@ -91,7 +104,12 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
       `ToolTipColor`, like the credits figure beside it.
     - Selection: a thin ground ellipse per selected unit, tinted by health,
       with a brighter front arc so it reads as lying on the ground; no drop
-      lines.
+      lines. The ring lies under its unit in the depth buffer, so it is
+      sized to the hull: vehicles and aircraft whose body voxel sweeps past
+      the standard ring take one of four larger rings (radius 30, 38, 46
+      or 58 px), chosen from half the diagonal of the body's voxel bounds
+      in MO 3.3.6. The 174 assignments are listed at the end of
+      `rulesmo.patch.ini` with the rule that produced them.
     - Hover readout: `current/max` health in a 3x5 pixel font sitting on
       the health bar (parallel to the diagonal bar on buildings), plus a
       light-blue production percentage beside your own factories.
@@ -103,38 +121,100 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
       `时间 mm:ss` like MO's own timers.
     - Super weapon sidebar on the left edge shows MO's own cameos without
       frame art; hotkeys `FireTacticalSW1`-`10` are bindable in the client.
+    - Build tabs: while a factory works, the tab's bottom bezel holds an
+      inset LED bar in the side's accent (Allied cyan, Soviet amber,
+      Epsilon violet, Foehn teal), one pixel per progress step, lit across
+      when the item is ready. Each side's bar is drawn for its own tab art,
+      at the tab buttons' origin (no `Sidebar.ProducingProgress.Offset`).
+    - Promotion: the unit's new insignia, pixel for pixel the `pips.shp`
+      chevron or star it now wears, flashes in and rises to sit just
+      above the health bar while a tapered four-point glint grows and
+      fades on its upper corner, answered by a smaller one below (a
+      third for elite), then fades. It is all overhead, on the top layer
+      like the bar, and never reaches the bar itself. Only the owner and allies
+      see it (it would mark a disguised unit), and it hides on cloaked
+      units.
+    - Firing anims (muzzle flashes and the like) follow their unit's FLH
+      and facing instead of hanging where the shot left. The 13 weapons
+      whose anim chains on with `Next=` keep the vanilla behaviour, since
+      tracking resets the anim type and the chain would never end.
+    - Lasers (all 145 `IsLaser`/`DiskLaser` weapons) keep their beam on
+      the firer's barrel and on the target while it lasts.
+    - Firing anims of air units (50 anims fired by aircraft and fly or
+      jumpjet units) draw in their firer's layer: the engine put every
+      attached anim on the ground layer, under the aircraft that fired it
+      (`Layer.UseObjectLayer`, in `artmo.patch.ini`).
+    - Turret recoil: the 34 turreted voxel vehicles that fire a gun shell
+      kick turret and barrel back on each shot; their other weapons
+      (missiles, bullets, beams, sprays) leave the turret still. MO marks
+      no weapon as a gun, so the shell projectiles are listed in
+      `rulesmo.patch.ini`.
+    - Per-unit and per-weapon settings sit at the end of
+      `rulesmo.patch.ini`, one section per object, with the rule behind
+      each key in the block header; a contract test keeps every patch
+      from updating one section in two places.
   - **`expandmo50.mix/`**: a new `EXPANDMO%02d.MIX` archive for Phobos-only
     files. It must be an expansion archive: the engine parses CSF tables and
     rules right after the `EXPANDMO` archives load and finds `ECACHE*`/
     `ELOCAL*` archives only later, which once left every `PHOBOS:*` label
     missing and crashed missions on start (exit `C0000409`). Its number sits
     below MO's 94-99, so it can only add files. Everything in it is built by
-    `just assets` from `assets/phobos/expandmo50.mix/`, where it is edited:
-    - `phselinf.shp`, `phselunt.shp` + `phsel.pal`: the selection rings,
-      three health frames each (sheets `phselinf.png`, `phselunt.png`).
-    - `phdigit.shp` + `phdigit.pal` / `phdigcy.pal`: the 3x5 readout font
-      in Phobos's 36-frame layout (sheet `phdigit.png`); the second
-      palette tints factory progress light blue.
+    `just assets` from `assets/phobos/expandmo50.mix/`, where it is edited.
+    Names follow one scheme: `ph` + a four-letter family + a variant, with
+    the family's shared file carrying the bare stem (`phring.pal`,
+    `phfont.shp`, `phrank.pal`); the types that use them are named for
+    what they draw (`PhobosRing24` draws `phring24.shp`, anim `PHRANKV`
+    is `phrankv.shp`, display `PhobosUnitHealth`).
+    - `phring11.shp` ... `phring58.shp` + `phring.pal`: the selection
+      rings, the number being the ring's horizontal radius in pixels: 11
+      for infantry, 24 for standard hulls, 30/38/46/58 for the larger hull
+      classes; three health frames each (sheets of the same names).
+    - `phfont.shp` + `phfonthp.pal` / `phfontfp.pal`: the 3x5 readout font
+      in Phobos's 36-frame layout (sheet `phfont.png`), coloured for health
+      or for factory progress (Phobos's `InfoType=FactoryProcess`, light
+      blue).
+    - `phrankv.shp`, `phranke.shp` + `phrank.pal`: the veteran and elite
+      promotion anims, 20 frames on a 48x112 canvas centred on the unit
+      (sheets `phrankv.png`, `phranke.png`), in the insignia's own
+      colours; the art and its translucency keyframes are in
+      `expandmo99.mix/artmo.patch.ini`.
     - `stringtable50.csf`: Chinese labels and hotkey names
       (`stringtable50.csf.toml`).
   - **`expandmo99.mix/`** (replacements of MO's own files and config patches):
-    - `place.shp` (translucent placement grid), `pipbrd.shp` (health bar frame).
+    - `place.shp` (placement grid) and `pipbrd.shp` (health bar track),
+      built from `assets/phobos/expandmo99.mix/` (`place.png`,
+      `pipbrd.png`, which embed `palette.pal`, the palette the engine
+      draws both with). Each grid state is a diamond with bright corners
+      in one four-tone family: MO's pip green for buildable, the pip red
+      for blocked, the readout blue for MO's white state. The bar track is
+      near-black slate, the readout digits' shadow tone.
     - `uimd.patch.ini`: loading screen, credits roll speed, the counters, the
-      super weapon sidebar layout, production strips, tooltips.
+      super weapon sidebar layout, production bars, tooltips.
+    - `artmo.patch.ini`: the promotion anims' art (rate, palette, layer,
+      visibility, fade).
     - `rulesmo.patch.ini`: the HUD above plus modern RTS controls and fixes:
       building queues, factory tab switching, building type-select,
       attack-move, `ApproachTarget.StopWhenInRange`, extended aircraft
       missions, turret tracking, burst recount, jumpjet climb/tilt, fast
       boarding, `SortCameoByName`, `DistributeTargetingFrame`, `ShakeIsLocal`,
-      blitter/lighting/targeting fixes, floating income, shadows and wakes,
+      blitter/lighting/targeting fixes, one share of height lighting for aircraft
+      and jumpjets alike, floating income, shadows and wakes,
       combat alerts (unit voices only; MO has no `EVA_UnitsInCombat`), low box
-      selection priority for all 10 harvesters, and the opt-in vanilla fixes
+      selection priority for all 10 harvesters, promotion anims, firing anims
+      and lasers that follow their unit, turret recoil, and the opt-in
+      vanilla fixes
       `DisableOveroptimizationInTargeting`, `AllowWeaponSelectAgainstWalls`,
       `[AI] EnablePowerSurplus`, and detail-aware light flashes.
     - Several of these keys change gameplay, so online games need every player
       on the same profile.
-  - **`expandmo96.mix/`**: `tab0{0..3}pp.shp` production progress strips in
-    each faction's `sidebar.pal` (nested `sidec0*.mix`).
+  - **`expandmo96.mix/`**: `tab0{0..3}pp.shp`, the production bars, one set
+    per side inside its nested sidebar archive, built from
+    `assets/phobos/expandmo96.mix/`. Each side has one filmstrip,
+    `tabpp.png`, whose palette is that side's `sidebar.pal` (Phobos
+    draws the bars with it), so the sheet shows true colours in any
+    editor. The engine loads both `SIDEC%02d.MIX` and `SIDEC%02dMD.MIX`,
+    so one copy per side suffices: `sidec01md`, `sidec02md`, `sidec03md`
+    and, because Foehn's `sidec04md.mix` holds no tab art, `sidec04`.
   - **`RA2MO.patch.ini`**: the player-side `[Phobos]` toggles behind the HUD.
   - **`Resources/`**:
     - `ClientDefinitions.patch.ini`: launches through SyringeEx `--args="..."`.

@@ -1,0 +1,13 @@
+# Selection ring palette: 0 transparent, then (front arc, back arc) per
+# health condition: full, ConditionYellow, ConditionRed. The pairs are
+# the two tones of MO's own health pips (pips.shp frames 16-18), so a
+# ring reads as the same colour as the bar above the unit.
+colours = [
+    "#000000",  # transparent
+    "#00FF00",  # green front
+    "#00C700",  # green back
+    "#FFD700",  # yellow front
+    "#FFB600",  # yellow back
+    "#FF0000",  # red front
+    "#DB0000",  # red back
+]

@@ -14,6 +14,10 @@ from mentara.assets import (
 )
 from mentara.config import load_config
 from mentara.patcher import (
+    INIAppend,
+    INIKeyOp,
+    INISet,
+    INIUpdateSection,
     PatchKind,
     parse_ini_patch,
     parse_patch_target,
@@ -173,6 +177,69 @@ def test_every_shipped_patch_parses(layer: str) -> None:
                 assert parse_ini_patch(text, source_path=path).operations, path
             case PatchKind.TOML:
                 assert parse_toml_patch(text, source_path=path), path
+
+
+@pytest.mark.parametrize("layer", [BASE_LAYER, PHOBOS_LAYER])
+def test_each_patch_updates_a_section_in_one_place(layer: str) -> None:
+    # A second update of the same section would split one object's
+    # settings across the file. ([-X] then [X], which replaces a
+    # duplicated definition, is one deletion and one update.)
+    for path, kind in _patch_files(layer):
+        if kind is not PatchKind.INI:
+            continue
+        patch = parse_ini_patch(path.read_text(encoding="utf-8"), source_path=path)
+        updated = [
+            operation.section.casefold()
+            for operation in patch.operations
+            if isinstance(operation, INIUpdateSection) and operation.section is not None
+        ]
+        repeated = sorted({name for name in updated if updated.count(name) > 1})
+        assert not repeated, (path, repeated)
+
+
+def _ini_sections(layer: str, target: str) -> dict[str, tuple[INIKeyOp, ...]]:
+    sections: dict[str, tuple[INIKeyOp, ...]] = {}
+    for path, kind in _patch_files(layer):
+        if kind is not PatchKind.INI or path.name.casefold() != f"{target}.patch.ini":
+            continue
+        patch = parse_ini_patch(path.read_text(encoding="utf-8"), source_path=path)
+        for operation in patch.operations:
+            # Keys above the first header (section None) name no type.
+            if (
+                isinstance(operation, INIUpdateSection)
+                and operation.section is not None
+            ):
+                name = operation.section.casefold()
+                sections[name] = sections.get(name, ()) + operation.operations
+    return sections
+
+
+@pytest.mark.parametrize("layer", [BASE_LAYER, PHOBOS_LAYER])
+def test_registered_animations_ship_their_art(layer: str) -> None:
+    # A layer that appends to [Animations] ships the art section and the
+    # shape too; otherwise the type keeps every art default and draws
+    # nothing.
+    registered = [
+        operation.value
+        for operation in _ini_sections(layer, "rulesmo").get("animations", ())
+        if isinstance(operation, INIAppend)
+    ]
+    art = _ini_sections(layer, "artmo")
+    shapes = {
+        path.stem.casefold() for path in _layer_files(layer) if path.suffix == ".shp"
+    }
+
+    for name in registered:
+        assert name.casefold() in art, name
+        image = next(
+            (
+                op.value
+                for op in art[name.casefold()]
+                if isinstance(op, INISet) and op.key.casefold() == "image"
+            ),
+            name,
+        )
+        assert image.casefold() in shapes, name
 
 
 def test_hide_version_warning_matches_the_shipped_phobos_build() -> None:

@@ -1,7 +1,0 @@
-# 3x5 HUD digits with a 1px drop shadow, in the frame order Phobos
-# digital displays expect: 0-9 at frames 0-9 (full health), 10-19
-# (ConditionYellow), 20-29 (ConditionRed); then "/" and "%" for each
-# condition at 30-31, 32-33, 34-35. Index 1-3 is the condition tone,
-# 4 the shadow (see phdigit.pal.toml and phdigcy.pal.toml).
-sheet = "phdigit.png"
-frame = [4, 6]

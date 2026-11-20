@@ -1,0 +1,10 @@
+# Placement grid (replaces MO's place.shp; PlacementGrid.Translucency
+# draws it at 50%). Frames 0-2 restyle MO's green, white and red cell
+# states, 3-18 MO's red slope pieces; 19-37 are empty, as in MO. Each
+# state is one diamond with bright corners in four tones of one family
+# from palette.pal, which the engine draws it with (embedded in
+# place.png): green is MO's health-pip ramp, red the pip red, and MO's
+# white becomes the readout blue.
+sheet = "place.png"
+frame = [60, 59]
+count = 38

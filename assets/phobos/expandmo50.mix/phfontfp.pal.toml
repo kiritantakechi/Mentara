@@ -1,0 +1,9 @@
+# Factory progress readout: every condition tone is the same light blue
+# from MO's palette.pal, so progress never reads as health.
+colours = [
+    "#000000",  # transparent
+    "#B6DBFF",
+    "#B6DBFF",
+    "#B6DBFF",
+    "#141418",  # shadow
+]

@@ -1,0 +1,5 @@
+# Selection ring of horizontal radius 46 px for hulls with a
+# half-diagonal up to 82 units; one frame per health condition (see
+# phring.pal.toml).
+sheet = "phring46.png"
+frame = [100, 52]

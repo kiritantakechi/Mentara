@@ -1,0 +1,15 @@
+# Promotion animation palette (phrankv/phranke.shp): the colours of MO's
+# veteran chevron and elite star (pips.shp frames 14-15, palette.pal),
+# in the order those frames use them, then the glint's two light tones.
+colours = [
+    "#000000",  # transparent
+    "#380000",  # insignia outline
+    "#5D0800",  # insignia inner outline
+    "#FFD700",  # chevron light, glint arm
+    "#FF8A00",  # chevron dark, glint tip
+    "#FFE796",  # star light, glint arm
+    "#EFAE55",  # star mid, glint arm
+    "#E79228",  # star dark
+    "#FFFFE8",  # flash (first two frames), glint core
+    "#FFF4C4",  # glint inner arm
+]

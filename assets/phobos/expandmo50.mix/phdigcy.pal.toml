@@ -1,9 +1,0 @@
-# Factory progress readout: every condition tone is the same light blue,
-# so progress never reads as health.
-colours = [
-    "#000000",  # transparent
-    "#B0D4FF",
-    "#B0D4FF",
-    "#B0D4FF",
-    "#14181C",  # shadow
-]

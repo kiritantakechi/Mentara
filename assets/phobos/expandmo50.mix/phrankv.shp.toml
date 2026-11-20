@@ -1,0 +1,8 @@
+# Veteran promotion, drawn entirely above the unit and its health bar
+# (the anim sits on the top layer, so nothing in it may reach the unit,
+# the bar or the ground): MO's own chevron, the pixels of pips.shp frame
+# 14, flashes in and rises while a tapered four-point glint grows and
+# fades on its upper corner, answered by a small one on the lower
+# corner. 20 frames on a 48x112 canvas centred on the unit.
+sheet = "phrankv.png"
+frame = [48, 112]

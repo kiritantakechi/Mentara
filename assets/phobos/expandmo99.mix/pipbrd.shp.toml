@@ -1,0 +1,6 @@
+# Health bar track (replaces MO's grey pipbrd.shp): frame 0 for
+# vehicles, 1 for infantry, a dark slate bar with rounded ends in the
+# HUD's shadow tones (palette.pal, embedded in pipbrd.png), so MO's
+# health pips sit on the same near-black as the readout digits' shadow.
+sheet = "pipbrd.png"
+frame = [38, 7]

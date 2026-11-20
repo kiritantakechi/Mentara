@@ -1,0 +1,10 @@
+# Health readout: the light tone of MO's health pip for each condition
+# (pips.shp frames 16-18), plus the digit shadow (#141418 from
+# palette.pal).
+colours = [
+    "#000000",  # transparent
+    "#00FF00",  # green: full health
+    "#FFD700",  # yellow: ConditionYellow
+    "#FF0000",  # red: ConditionRed
+    "#141418",  # shadow
+]

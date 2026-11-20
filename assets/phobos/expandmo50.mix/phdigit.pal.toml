@@ -1,8 +1,0 @@
-# Health readout: the HUD tones per condition, plus the digit shadow.
-colours = [
-    "#000000",  # transparent
-    "#76EC8C",  # green: full health
-    "#F8D060",  # amber: ConditionYellow
-    "#F86460",  # red: ConditionRed
-    "#14181C",  # shadow
-]

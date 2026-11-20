@@ -1,0 +1,3 @@
+# Production bar over the vehicles and aircraft tab.
+sheet = "tabpp.png"
+frame = [32, 28]

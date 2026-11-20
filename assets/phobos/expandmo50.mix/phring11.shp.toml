@@ -1,0 +1,4 @@
+# Selection ring of horizontal radius 11 px for infantry; one frame per
+# health condition (see phring.pal.toml).
+sheet = "phring11.png"
+frame = [30, 16]

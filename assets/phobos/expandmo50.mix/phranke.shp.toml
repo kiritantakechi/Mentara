@@ -1,0 +1,4 @@
+# Elite promotion: MO's own star (pips.shp frame 15) with a larger glint
+# and a third answering one, timed and placed like phrankv.shp.
+sheet = "phranke.png"
+frame = [48, 112]

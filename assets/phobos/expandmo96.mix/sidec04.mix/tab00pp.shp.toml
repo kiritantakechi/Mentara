@@ -1,0 +1,3 @@
+# Production bar over the buildings tab.
+sheet = "tabpp.png"
+frame = [32, 28]
