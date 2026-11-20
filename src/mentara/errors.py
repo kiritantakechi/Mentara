@@ -5,6 +5,7 @@ lazy from collections.abc import Sequence
 lazy from pathlib import Path
 
 __all__ = [
+    "AssetError",
     "ConfigError",
     "MentaraError",
     "MountError",
@@ -419,3 +420,46 @@ class RunnerError(MentaraError):
         """
         prog = command[0] if command else "<empty>"
         return cls(f"Failed to launch {prog}: {detail}")
+
+
+class AssetError(MentaraError):
+    """Raised when an asset source cannot be decoded or compiled."""
+
+    @classmethod
+    def invalid_format(cls, format_name: str, detail: str) -> Self:
+        """Build an error for malformed data in a file format.
+
+        Args:
+            format_name: Format being decoded or encoded, such as `PNG`.
+            detail: What is wrong with the data.
+
+        Returns:
+            An `AssetError` naming the format and the problem.
+        """
+        return cls(f"Invalid {format_name} data: {detail}")
+
+    @classmethod
+    def invalid_source(cls, path: Path, detail: str) -> Self:
+        """Build an error for an asset source that cannot be compiled.
+
+        Args:
+            path: Source file or directory.
+            detail: Underlying decoding or validation failure.
+
+        Returns:
+            An `AssetError` naming the source.
+        """
+        return cls(f"Cannot build asset from {path}: {detail}")
+
+    @classmethod
+    def missing_tool(cls, tool: str, purpose: str) -> Self:
+        """Build an error when a required build tool is not installed.
+
+        Args:
+            tool: Executable name searched on `PATH`.
+            purpose: What the tool is needed for.
+
+        Returns:
+            An `AssetError` naming the missing tool.
+        """
+        return cls(f"{tool} not found on PATH; it is needed to {purpose}")

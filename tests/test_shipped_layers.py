@@ -6,6 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from mentara.assets import (
+    AssetKind,
+    AssetSource,
+    compile_asset,
+    find_asset_sources,
+)
 from mentara.config import load_config
 from mentara.patcher import (
     PatchKind,
@@ -22,10 +28,10 @@ _ENGINE_SUFFIXES = frozenset({".dll", ".exe", ".edb", ".pdb"})
 _HIDE_VERSION_RE = re.compile(r"-HideVersionWarning=([^\s\"'`,\]]+)")
 _EXPANSION_MIX_RE = re.compile(r"expandmo\d{2}\.mix")
 _MIX_PATCH_SUFFIX = ".patch.mix"
-HOOK_SOURCE = PROJECT_DIR / "hooks" / "mentara_fixes.c"
-HOOK_DLL = PROJECT_DIR / BASE_LAYER / "MentaraFixes.dll"
 _DEFINE_HOOK_RE = re.compile(r"DEFINE_HOOK\(\s*(0x[0-9A-Fa-f]+),\s*(\w+),\s*(\d+)\)")
 _HOOK_SECTION = ".syhks00"
+# Syringe's hookdecl is 16-byte aligned: address, size, name, padding.
+_HOOK_STRIDE = 16
 
 type _Hook = tuple[int, str, int]
 
@@ -52,9 +58,11 @@ class _Section:
     rva: int
     virtual_size: int
     raw_offset: int
+    raw_size: int
 
     def contains(self, rva: int) -> bool:
-        return self.rva <= rva < self.rva + self.virtual_size
+        # Some linkers leave VirtualSize at 0 and rely on the raw size.
+        return self.rva <= rva < self.rva + max(self.virtual_size, self.raw_size)
 
 
 def _u32(image: bytes, offset: int) -> int:
@@ -74,6 +82,7 @@ def _syringe_hooks(image: bytes) -> tuple[set[_Hook], set[str]]:
             rva=_u32(image, header + 12),
             virtual_size=_u32(image, header + 8),
             raw_offset=_u32(image, header + 20),
+            raw_size=_u32(image, header + 16),
         )
         for header in range(table, table + 40 * section_count, 40)
     ]
@@ -91,8 +100,9 @@ def _syringe_hooks(image: bytes) -> tuple[set[_Hook], set[str]]:
         for section in sections
         if section.name == _HOOK_SECTION
         for entry in range(
-            section.raw_offset, section.raw_offset + section.virtual_size, 12
+            section.raw_offset, section.raw_offset + section.virtual_size, _HOOK_STRIDE
         )
+        if _u32(image, entry)  # zero entries pad the table
     }
     export_dir = file_offset(_u32(image, optional + 96))
     names = file_offset(_u32(image, export_dir + 32))
@@ -181,17 +191,54 @@ def test_hide_version_warning_matches_the_shipped_phobos_build() -> None:
     assert f"-HideVersionWarning={version}".encode("ascii") in phobos_dll
 
 
-def test_hook_dll_declares_exactly_the_hooks_in_its_source() -> None:
-    # The DLL is committed so players need no compiler, and `just hooks`
-    # rebuilds it; a hook edited in C must not ship without a rebuild.
-    declared = {
-        (int(address, 16), name, int(size))
-        for address, name, size in _DEFINE_HOOK_RE.findall(
-            HOOK_SOURCE.read_text(encoding="utf-8")
-        )
-    }
-    hooks, exports = _syringe_hooks(HOOK_DLL.read_bytes())
+def _shipped_asset_sources() -> tuple[AssetSource, ...]:
+    source_root, output_root = load_config(CONFIG_PATH).assets.resolve(PROJECT_DIR)
+    return find_asset_sources(source_root, output_root)
 
-    assert declared
-    assert hooks == declared
-    assert {name for _, name, _ in declared} <= exports
+
+def test_generated_layer_files_match_their_sources() -> None:
+    # `just assets` builds these. A source edited without a rebuild, or
+    # a hand-edited output, fails here. Hook DLL bytes depend on the
+    # clang version, so DLLs are checked against their declarations.
+    sources = [s for s in _shipped_asset_sources() if s.kind is not AssetKind.HOOK_DLL]
+
+    assert sources
+    for source in sources:
+        assert source.output.read_bytes() == compile_asset(source), source.output
+
+
+def test_hook_dlls_declare_exactly_the_hooks_in_their_sources() -> None:
+    # DLLs are committed so players need no compiler; each Syringe hook
+    # table must match the DEFINE_HOOKs in the C sources it came from.
+    dlls = [s for s in _shipped_asset_sources() if s.kind is AssetKind.HOOK_DLL]
+
+    assert dlls
+    for source in dlls:
+        declared = {
+            (int(address, 16), name, int(size))
+            for c_file in sorted(source.path.glob("*.c"))
+            for address, name, size in _DEFINE_HOOK_RE.findall(
+                c_file.read_text(encoding="utf-8")
+            )
+        }
+        hooks, exports = _syringe_hooks(source.output.read_bytes())
+        assert declared, source.path
+        assert hooks == declared, source.output
+        assert {name for _, name, _ in declared} <= exports, source.output
+
+
+def test_base_layer_ships_ares_with_its_matching_hook_list() -> None:
+    # Ares.dll and Ares.dll.inj must come from one release: the .inj
+    # schedules every hook the DLL exports. (Both official releases
+    # also list a few hooks Ares never built; Syringe skips those.)
+    base = PROJECT_DIR / BASE_LAYER
+    dll = (base / "Ares.dll").read_bytes()
+    _, exports = _syringe_hooks(dll)
+    hook_names = {
+        line.partition("=")[2].partition(",")[0].strip()
+        for line in (base / "Ares.dll.inj").read_text(encoding="latin-1").splitlines()
+        if "=" in line and not line.lstrip().startswith(";")
+    }
+
+    assert "3.0p1".encode("utf-16-le") in dll
+    assert exports - hook_names == {"SyringeHandshake"}

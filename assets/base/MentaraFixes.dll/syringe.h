@@ -19,7 +19,10 @@ typedef struct REGISTERS {
     DWORD EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX;
 } REGISTERS;
 
-typedef struct HookDecl {
+/* Syringe declares hookdecl 16-byte aligned and walks the table with
+ * that stride; a packed 12-byte table misreads every entry after the
+ * first. */
+typedef struct __declspec(align(16)) HookDecl {
     unsigned int address;
     unsigned int size;
     const char *name;

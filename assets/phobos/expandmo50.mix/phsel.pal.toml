@@ -1,0 +1,11 @@
+# Selection ring palette: 0 transparent, then (front arc, back arc) per
+# health condition: full, ConditionYellow, ConditionRed.
+colours = [
+    "#000000",  # transparent
+    "#76EC8C",  # green front
+    "#409656",  # green back
+    "#F8D060",  # amber front
+    "#9E8034",  # amber back
+    "#F86460",  # red front
+    "#9E3838",  # red back
+]

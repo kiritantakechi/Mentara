@@ -1,0 +1,62 @@
+# Chinese strings for the Phobos UI. Ares loads stringtable00-99.csf
+# (MO itself ships 09-11 in expandmo98.mix).
+
+[strings]
+# Phobos prints "<label> mm:ss", so no trailing space.
+"TXT_GAMETIME" = "时间"
+"PHOBOS:CostLabel" = "$"
+# Shared by tooltips and the credits-bar power counter, which draws in
+# the Metal12 numeral font that has no CJK glyphs; the signed value and
+# its colour already say "power".
+"PHOBOS:PowerLabel" = ""
+# Shown alone in the Metal12 power counter during a blackout.
+"PHOBOS:PowerBlackoutLabel" = "--"
+# Tooltips read "$cost mm:ss +power": the formats identify each value,
+# and the string loader strips the trailing space a label would need.
+"PHOBOS:TimeLabel" = ""
+# Metal12 credits-bar counter: digits only (active/total).
+"PHOBOS:HarvesterLabel" = ""
+"PHOBOS:SWShotsFormat" = "剩余 %d/%d 次"
+"TXT_TOGGLE_SW_SIDEBAR" = "切换超武侧栏"
+"TXT_TOGGLE_SW_SIDEBAR_DESC" = "展开或收起屏幕左侧的超级武器快捷栏"
+"TXT_NEXT_IDLE_HARVESTER" = "选择空闲矿车"
+"TXT_NEXT_IDLE_HARVESTER_DESC" = "选中下一辆当前未在采矿的矿车并居中视野"
+"TXT_SELECT_CAPTURED" = "选择被俘获单位"
+"TXT_SELECT_CAPTURED_DESC" = "选中当前屏幕内被心灵控制或临时俘获的单位"
+"MSG:SelectCaptured" = "已选中被心控/俘获的单位。"
+"TXT_DESELECT" = "取消选中 1 个单位"
+"TXT_DESELECT_DESC" = "从当前选中的部队中移除 1 个单位"
+"TXT_DESELECT5" = "取消选中 5 个单位"
+"TXT_DESELECT5_DESC" = "从当前选中的部队中移除 5 个单位"
+"TXT_DIGITAL_DISPLAY" = "切换数值显示"
+"TXT_DIGITAL_DISPLAY_DESC" = "开启或关闭单位与建筑的微缩数值状态显示"
+"TXT_DESIGNATOR_RANGE" = "切换范围提示圈"
+"TXT_DESIGNATOR_RANGE_DESC" = "开启或关闭超武指示器、抑制器与电厂增幅范围圈"
+"TXT_TOGGLE_MESSAGE" = "切换中央消息面板"
+"TXT_TOGGLE_MESSAGE_DESC" = "在屏幕中央消息面板与左上角传统消息列表之间切换"
+"TXT_QUICKSAVE" = "快速存档"
+"TXT_QUICKSAVE_DESC" = "在单人战役或任务中立即执行快速保存"
+"TXT_QUICKSAVE_SUFFIX" = " - 快速存档"
+"MSG:NotAvailableInMultiplayer" = "多人游戏中不可用。"
+"TXT_DISPLAY_DAMAGE" = "显示伤害数字"
+"TXT_DISPLAY_DAMAGE_DESC" = "切换跳出式实时武器伤害数字显示"
+"TXT_FIRE_TACTICAL_SW_01" = "释放快捷超武 1"
+"TXT_FIRE_TACTICAL_SW_02" = "释放快捷超武 2"
+"TXT_FIRE_TACTICAL_SW_03" = "释放快捷超武 3"
+"TXT_FIRE_TACTICAL_SW_04" = "释放快捷超武 4"
+"TXT_FIRE_TACTICAL_SW_05" = "释放快捷超武 5"
+"TXT_FIRE_TACTICAL_SW_06" = "释放快捷超武 6"
+"TXT_FIRE_TACTICAL_SW_07" = "释放快捷超武 7"
+"TXT_FIRE_TACTICAL_SW_08" = "释放快捷超武 8"
+"TXT_FIRE_TACTICAL_SW_09" = "释放快捷超武 9"
+"TXT_FIRE_TACTICAL_SW_10" = "释放快捷超武 10"
+"TXT_FIRE_TACTICAL_SW_01_DESC" = "快速触发左侧超级武器栏第 1 个槽位"
+"TXT_FIRE_TACTICAL_SW_02_DESC" = "快速触发左侧超级武器栏第 2 个槽位"
+"TXT_FIRE_TACTICAL_SW_03_DESC" = "快速触发左侧超级武器栏第 3 个槽位"
+"TXT_FIRE_TACTICAL_SW_04_DESC" = "快速触发左侧超级武器栏第 4 个槽位"
+"TXT_FIRE_TACTICAL_SW_05_DESC" = "快速触发左侧超级武器栏第 5 个槽位"
+"TXT_FIRE_TACTICAL_SW_06_DESC" = "快速触发左侧超级武器栏第 6 个槽位"
+"TXT_FIRE_TACTICAL_SW_07_DESC" = "快速触发左侧超级武器栏第 7 个槽位"
+"TXT_FIRE_TACTICAL_SW_08_DESC" = "快速触发左侧超级武器栏第 8 个槽位"
+"TXT_FIRE_TACTICAL_SW_09_DESC" = "快速触发左侧超级武器栏第 9 个槽位"
+"TXT_FIRE_TACTICAL_SW_10_DESC" = "快速触发左侧超级武器栏第 10 个槽位"

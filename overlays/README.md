@@ -6,7 +6,7 @@ this order (bottom to top):
 
 ```text
 Mental Omega 3.3.6 game directory   (read-only)
-└─ overlays/base     fixes and adjustments to MO itself; stock Ares 3.0 only
+└─ overlays/base     fixes and adjustments to MO itself; Ares 3.0p1, no Phobos
    └─ overlays/phobos   Phobos engine fixes and modernization on the fixed game
 ```
 
@@ -16,9 +16,16 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
 
 ## Included Layers
 
-- `overlays/base/`: Data fixes for Mental Omega 3.3.6 that need only the stock
-  Ares 3.0 engine. Every fix was found by auditing the decrypted MO data and
+- `overlays/base/`: Fixes for Mental Omega 3.3.6 that need only Ares. Every
+  fix was found by auditing the decrypted MO data or the running engine and
   is documented next to the change:
+  - **`Ares.dll` + `Ares.dll.inj`**: Ares 3.0p1 (`21.352.1218`, the newest
+    Ares release) replaces MO's Ares 3.0. It is the official backward
+    compatible service release (crash, super weapon timer, cloning,
+    tunnel and harvester-docking fixes; 3.0 saves still load), and Phobos
+    detects it by PE timestamp. Ares versions must match for online play,
+    so mixed lobbies need every player on the same profile. A contract
+    test checks the `.inj` schedules every hook the DLL exports.
   - **`expandmo99.mix/aimo.patch.ini`** (skirmish AI): MO defines four AI IDs
     twice with different contents, and the engine merges the copies key by key,
     so one of the teams sharing each ID got the other's units or script:
@@ -39,8 +46,9 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
       task force.
   - Exact duplicates that change nothing (`FOETF055-G`, `FOETF117-G`,
     `ULTITF60-G`, art `[GAOREFBB]`) are left alone.
-  - **`MentaraFixes.dll`** (Syringe hook DLL built from `hooks/` by
-    `just hooks`; Syringe injects it next to Ares): campaigns crashed under
+  - **`MentaraFixes.dll`** (Syringe hook DLL built from
+    `assets/base/MentaraFixes.dll/` by `just assets`; Syringe injects it
+    next to Ares): campaigns crashed under
     Wine with stock MO (exit `C0000005` at `0x00529A14`). The CnCNet spawner
     routes every `-SPAWN` game through the scenario reader that loads the
     multiplayer `[Header]` without resetting it first; campaign maps have no
@@ -49,8 +57,8 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
     off the scenario object. The hook skips that block in campaigns at
     `0x689EB0`, exactly like Phobos's `ScenarioClass_ReadMap_SkipHeaderInCampaign`,
     so the Ares-only and Phobos stacks behave alike and loading both is
-    harmless. Ares 3.0p1 was tested and does not fix this, so MO keeps its
-    stock Ares 3.0 and stays compatible online.
+    harmless (Ares 3.0p1 alone does not fix it). Syringe walks hook tables
+    with a 16-byte stride, so its `syringe.h` aligns each entry to 16.
   - **`expandmo99.mix/artmo.patch.ini`**: seven civilian buildings (`CAWHSE`,
     `CAJHUT`, `CANHSE01/02`, `CAPRSNF`, `CASLUMA`, `CABRKK`) name a `cargo`
     palette that no MO archive ships (all 41 other custom palettes ship every
@@ -59,110 +67,78 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
   - **`expandmo99.mix/uimd.patch.ini`**: `[UISettings] CampaignButton=show` is
     not an Ares value (`default|disable|hide|message|credits|sneakpeek`) and
     logged "Unrecognized UI action value" on every start; it is `default`.
-- `overlays/phobos/`: Upstream **Phobos `v0.5-alpha2`** (`Phobos.dll`,
-  bundled `Syringe.exe` / SyringeEx `0.1.0.2`, `gamemd.edb`,
-  `Syringe.LICENSE.txt`, and `Phobos.pdb` which is excluded from Git via
-  `*.pdb` in `.gitignore`), organized cleanly into categorized Westwood MIX
-  containers and declarative `.patch.ini` files (zero loose asset clutter in
-  the overlay root):
-  - **`expandmo50.mix/`** (a new `EXPANDMO%02d.MIX` archive holding every
-    Phobos-only asset and string). It must be an expansion archive: the
-    engine parses CSF string tables and rules right after the `EXPANDMO`
-    archives load, and only finds `ECACHE*`/`ELOCAL*` archives later. With
-    the files in those, every `PHOBOS:*` label resolved to
-    `MISSING:'PHOBOS:HarvesterLabel'` and Phobos overflowed a fixed
-    `swprintf_s` buffer formatting it, crashing every mission on start
-    (exit `C0000409`). Its number sits below MO's own 94-99 archives, so it
-    can only add files, never shadow MO's.
-    - `phdigit.shp` + `phdigit.pal` / `phdigcy.pal`: Condensed `4×6` modernist
-      micro-HUD telemetry numerals with directional drop-shadow (no heavy retro
-      black borders) for hover unit/building HP and factory progress displays.
-    - `phselinf.shp` + `phselunt.shp` + `phsel.pal`: Pure-light translucent
-      holographic isometric selection rings (`EnableSelectBox=true`, zero black
-      outline) with segmented corner tactical brackets and dashed vertical
-      altitude drop-lines for aircraft and jumpjets.
-    - Every SHP in this layer is RLE-zero data flagged as compression 3,
-      the only RLE flag MO's own art uses and the one Phobos requires for
-      select-box shapes (frames flagged 2 can draw like an AlphaImage).
-    - `sws_{all,sov,eps,foe}_{top,mid,bot,on,off}.pcx`: 24-bit full-color
-      architectural dark carbon-glass SuperWeapon Sidebar docks (`68×52`
-      center, `68×10` chamfered caps, `12×40` slim chevron pull-tabs) styled
-      for Allies, Soviet, Epsilon, and Foehn.
-    - `stringtable50.csf`: Native Chinese CSF labels for Phobos HUD counters,
-      tooltips, game clock (`TXT_GAMETIME`), and hotkey names/descriptions.
-      Ares loads `stringtable00`-`99.csf`; MO itself ships 09-11 in
-      `expandmo98.mix`.
-  - **`expandmo99.mix/`** (highest-priority `EXPANDMO%02d.MIX`: replacements of
-    MO's own files and config patches):
-    - `place.shp`: Modern translucent holographic building placement grid
-      (emerald-mint buildable pads with corner brackets, ice-cyan active
-      reticle, coral-crimson blocked pads with isometric `×` cross, and all 16
-      sloped terrain cells modernized pixel-accurately from base MO).
-    - `pipbrd.shp`: Modern chamfered dark-carbon unit/infantry healthbar
-      capsules with subtle quarter-ticks (replacing 1998 bright-grey checkered
-      healthbar stripes).
-    - `uimd.patch.ini`: Hides empty loading-screen spawn dots, speeds up smooth
-      credit rolling (`MaxStep=500`), configures aligned harvester & power delta
-      counters (`75%`/`100%` usage thresholds), sidebar `ProducingProgress` LED
-      strips, slim `68×52` collapsible `SuperWeaponSidebar`, centered pause menu
-      background, and anchored 340px extended tooltips with native CSF labels.
-    - `rulesmo.patch.ini`: Enables modern RTS controls & QoL (building queues,
-      auto-tab factory switching, building type-select, `AttackMove.Aggressive`
-      & `AttackMove.UpdateTarget`, `ApproachTarget.StopWhenInRange`,
-      `HarvesterScanAfterUnload`, `ExtendedAircraftMissions`,
-      `NoTurret.TrackTarget`, `JumpjetClimb*`, `RecountBurst`,
-      `TypeSelectUseIFVMode`, fast transport/bunker/amphibious boarding,
-      `SortCameoByName`), performance & fixes (`DistributeTargetingFrame`,
-      `ShakeIsLocal`, fixed blitters/lighting/targeting), modern visuals
-      (`JumpjetTilt` flight banking, `JumpjetLevelLightMultiplier`,
-      `NoAlphaImageOnBuildup`, translucent placement previews & holographic
-      grid, ice-cyan blinking timers & airstrike laser lines, floating income,
-      dynamic shadows & wakes, `SelectBox` rings, SHP digital displays with
-      disguise protection), faction carbon-glass tooltips & counter themes, and
-      `LowSelectionPriority` on all 10 harvester types. Opt-in Phobos fixes
-      for vanilla bugs: `DisableOveroptimizationInTargeting` (units no longer
-      settle for the first target in partial range),
-      `AllowWeaponSelectAgainstWalls` (Secondary used on walls the Primary
-      cannot hurt), `[AI] EnablePowerSurplus` (AI honours MO's
-      `PowerSurplus=50`), and light-flash/combat-light effects that follow the
-      player's detail level and `HideLightFlashEffects` toggle. Combat alerts
-      use unit voices only (`CombatAlert.UseEVA=false`), because MO has no
-      `EVA_UnitsInCombat`.
-    - Several of these keys change gameplay (attack-move, burst recount,
-      targeting, boarding, AI power), so online games need every player on
-      the same profile.
-  - **`expandmo96.mix/`** (per-side nested `sidec0{1md,2md,3,3md,4,4md}.mix/`):
-    - `tab0{0..3}pp.shp`: Ultra-slim 3px borderless hairline glowing LED
-      production progress strips rendered in each faction's native
-      `sidebar.pal`.
-  - **`RA2MO.patch.ini`**: Enables player-side `[Phobos]` UX toggles (crisp
-    carbon-glass tooltips, `EnableSelectBox`, smart selection/deploy filtering,
-    IFV mode type-select, placement preview, designator/enhancer range rings,
-    SHP digital displays, power delta & harvester counters, game clock,
-    centered subtitle board, adaptive real-time timers, mission start saves).
+- `overlays/phobos/`: Upstream **Phobos `v0.5-alpha2`** (`Phobos.dll`, SyringeEx
+  `0.1.0.2` as `Syringe.exe`, `gamemd.edb`, and `Phobos.pdb`, kept out of Git)
+  with declarative patches and a small set of generated assets.
+  - **HUD design ("quiet, native")**: every Phobos addition should look like it
+    shipped with MO. Readouts use MO's fonts and faction colours, appear on
+    hover or selection rather than permanently, and share one colour system:
+    green `118,236,140`, amber `248,208,96`, red `248,100,96`.
+    - Credits strip: power surplus (left) and active/total harvesters (right)
+      as bare numbers. Their labels are empty because the strip draws in the
+      `Metal12` numeral font, which has no CJK glyphs (the old "电"/"矿"
+      labels rendered as garbage). The harvester count keeps the side's
+      `ToolTipColor`, like the credits figure beside it.
+    - Selection: a thin ground ellipse per selected unit, tinted by health,
+      with a brighter front arc so it reads as lying on the ground; no drop
+      lines.
+    - Hover readout: `current/max` health in a 3x5 pixel font sitting on
+      the health bar (parallel to the diagonal bar on buildings), plus a
+      light-blue production percentage beside your own factories.
+    - Tooltips: anchored left of the sidebar, `name / $cost mm:ss ±power`.
+      (The string loader strips trailing spaces, so values carry no labels
+      where a separator would be needed.)
+    - Messages stay in MO's top-left list (hover keeps them); the centred
+      message board and its toggle button are off. The game clock reads
+      `时间 mm:ss` like MO's own timers.
+    - Super weapon sidebar on the left edge shows MO's own cameos without
+      frame art; hotkeys `FireTacticalSW1`-`10` are bindable in the client.
+  - **`expandmo50.mix/`**: a new `EXPANDMO%02d.MIX` archive for Phobos-only
+    files. It must be an expansion archive: the engine parses CSF tables and
+    rules right after the `EXPANDMO` archives load and finds `ECACHE*`/
+    `ELOCAL*` archives only later, which once left every `PHOBOS:*` label
+    missing and crashed missions on start (exit `C0000409`). Its number sits
+    below MO's 94-99, so it can only add files. Everything in it is built by
+    `just assets` from `assets/phobos/expandmo50.mix/`, where it is edited:
+    - `phselinf.shp`, `phselunt.shp` + `phsel.pal`: the selection rings,
+      three health frames each (sheets `phselinf.png`, `phselunt.png`).
+    - `phdigit.shp` + `phdigit.pal` / `phdigcy.pal`: the 3x5 readout font
+      in Phobos's 36-frame layout (sheet `phdigit.png`); the second
+      palette tints factory progress light blue.
+    - `stringtable50.csf`: Chinese labels and hotkey names
+      (`stringtable50.csf.toml`).
+  - **`expandmo99.mix/`** (replacements of MO's own files and config patches):
+    - `place.shp` (translucent placement grid), `pipbrd.shp` (health bar frame).
+    - `uimd.patch.ini`: loading screen, credits roll speed, the counters, the
+      super weapon sidebar layout, production strips, tooltips.
+    - `rulesmo.patch.ini`: the HUD above plus modern RTS controls and fixes:
+      building queues, factory tab switching, building type-select,
+      attack-move, `ApproachTarget.StopWhenInRange`, extended aircraft
+      missions, turret tracking, burst recount, jumpjet climb/tilt, fast
+      boarding, `SortCameoByName`, `DistributeTargetingFrame`, `ShakeIsLocal`,
+      blitter/lighting/targeting fixes, floating income, shadows and wakes,
+      combat alerts (unit voices only; MO has no `EVA_UnitsInCombat`), low box
+      selection priority for all 10 harvesters, and the opt-in vanilla fixes
+      `DisableOveroptimizationInTargeting`, `AllowWeaponSelectAgainstWalls`,
+      `[AI] EnablePowerSurplus`, and detail-aware light flashes.
+    - Several of these keys change gameplay, so online games need every player
+      on the same profile.
+  - **`expandmo96.mix/`**: `tab0{0..3}pp.shp` production progress strips in
+    each faction's `sidebar.pal` (nested `sidec0*.mix`).
+  - **`RA2MO.patch.ini`**: the player-side `[Phobos]` toggles behind the HUD.
   - **`Resources/`**:
-    - `ClientDefinitions.patch.ini`: Migrates `MentalOmegaClient.exe` to
-      SyringeEx `--args="..."` launch syntax.
-    - `KeyboardCommands.patch.ini`: Exposes Phobos hotkeys in the client's
-      graphical Hotkey configuration window, including the ten super weapon
-      sidebar slots `FireTacticalSW1`-`10` (unbound by default). The
-      developer-only `Display Damage Numbers` command is not listed because
-      MO sets `DebugKeysEnabled=no`.
-    - `OptionsWindow.patch.ini`: Hides MO's optional `savefixmo.dll`
-      ("存档功能修正"). It hooks seven of the same save/load addresses as
-      Phobos and writes its own block into the save stream, so the two must
-      not load together. Phobos covers its `BuildOffAlly`-after-load fix, but
-      not its map-lighting-after-load fix; the `base` profile keeps the
-      option.
-  - Version notes (checked 2026-11-21): `v0.5-alpha2` (2026-10-10) is the
-    newest published Phobos build; the latest stable `v0.4.0.2` predates the
-    SyringeEx requirement, and nightlies must not be shipped. Phobos detects
-    MO's stock Ares 3.0 (`20.333.289`) by PE timestamp and enables its full
-    Ares compatibility set, so Ares 3.0p1 is not required.
-    `-HideVersionWarning=` must match the Phobos `FileVersion` exactly, so
-    update it in `ClientDefinitions.patch.ini` and the `syringe` profile with
-    every Phobos upgrade. Saves are tied to the Phobos version line, and
-    pre-Phobos saves are hidden.
+    - `ClientDefinitions.patch.ini`: launches through SyringeEx `--args="..."`.
+    - `KeyboardCommands.patch.ini`: Phobos hotkeys in the client's hotkey
+      window (unbound super weapon slots; no developer-only commands).
+    - `OptionsWindow.patch.ini`: hides MO's optional `savefixmo.dll`
+      ("存档功能修正"), which hooks seven of the same save/load addresses as
+      Phobos. Phobos covers its `BuildOffAlly`-after-load fix but not its
+      map-lighting-after-load fix; the `base` profile keeps the option.
+  - Version notes (checked 2026-11-21): `v0.5-alpha2` is the newest published
+    Phobos build; nightlies must not be shipped. `-HideVersionWarning=` must
+    match the Phobos `FileVersion` (a contract test checks it against
+    `Phobos.dll`). Saves are tied to the Phobos version line, and pre-Phobos
+    saves are hidden.
   - Source: https://github.com/Phobos-developers/Phobos/releases/tag/v0.5-alpha2
 
 ## Text-Level Patching

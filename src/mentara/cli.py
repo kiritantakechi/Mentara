@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Final, TextIO, assert_never
 lazy from collections.abc import Sequence
 
+from mentara.assets import find_asset_sources, stale_assets, write_assets
 from mentara.config import (
     BackendKind,
     MentaraConfig,
@@ -159,6 +160,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_profile_flags(doctor_parser)
 
+    assets_parser = subparsers.add_parser(
+        "assets",
+        help="Build generated layer files from the asset source tree.",
+    )
+    assets_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Only report outputs that are missing or out of date.",
+    )
+
     return parser
 
 
@@ -297,6 +308,13 @@ def _dispatch(
         case "doctor":
             profile = _resolve_from_args(config, config_dir, args)
             exit_code = _cmd_doctor(profile, stdout=stdout, stderr=stderr)
+        case "assets":
+            exit_code = _cmd_assets(
+                config,
+                config_dir=config_dir,
+                check=bool(args.check),
+                stdout=stdout,
+            )
         case _:
             stderr.write(f"error: unknown subcommand {subcommand!r}\n")
             exit_code = _EXIT_ERROR
@@ -320,6 +338,30 @@ def _strip_leading_dash_dash(args: tuple[str, ...]) -> tuple[str, ...]:
     if args and args[0] == "--":
         return args[1:]
     return args
+
+
+def _cmd_assets(
+    config: MentaraConfig,
+    *,
+    config_dir: Path,
+    check: bool,
+    stdout: TextIO,
+) -> int:
+    source_root, output_root = config.assets.resolve(config_dir)
+    sources = find_asset_sources(source_root, output_root)
+    if check:
+        stale = stale_assets(sources)
+        stdout.writelines(
+            f"stale: {source.output.relative_to(config_dir)}\n" for source in stale
+        )
+        stdout.write(f"{len(sources)} asset(s), {len(stale)} stale\n")
+        return _EXIT_ERROR if stale else 0
+    written = write_assets(sources)
+    stdout.writelines(
+        f"built: {source.output.relative_to(config_dir)}\n" for source in written
+    )
+    stdout.write(f"{len(sources)} asset(s), {len(written)} rebuilt\n")
+    return 0
 
 
 def _cmd_profiles(

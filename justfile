@@ -90,10 +90,10 @@ cov:
 [group("dev")]
 check: fmt-check lint typecheck test
 
-# Build the base layer's Syringe hook DLL from hooks/ (needs clang and lld).
+# Build generated layer files from assets/ (string tables, palettes, shapes, hook DLLs).
 [group("dev")]
-hooks:
-    clang --target=i686-pc-windows-msvc -std=c17 -O2 -Wall -Wextra -Werror -fno-stack-protector -shared -nostdlib -fuse-ld=lld "-Wl,/noentry,/noimplib,/Brepro" -o overlays/base/MentaraFixes.dll hooks/mentara_fixes.c
+assets *args:
+    uv run mentara assets {{ args }}
 
 # Build wheel and sdist using uv_build.
 [group("dev")]

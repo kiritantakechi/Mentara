@@ -22,6 +22,7 @@ __all__ = [
     "CONFIG_FILENAME_DEFAULT",
     "COPY_PATTERNS_DEFAULT",
     "EXCLUDE_DEFAULT",
+    "AssetsConfig",
     "BackendKind",
     "MIXConfig",
     "MIXDecryptMode",
@@ -110,6 +111,29 @@ class MIXConfig(BaseModel):
         return self
 
 
+class AssetsConfig(BaseModel):
+    """Where asset sources live and the layer tree they build."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source: str = "assets"
+    output: str = "overlays"
+
+    def resolve(self, config_dir: Path) -> tuple[Path, Path]:
+        """Resolve `source` and `output` against the config directory.
+
+        Args:
+            config_dir: Directory containing `mentara.toml`.
+
+        Returns:
+            `(source_root, output_root)` as absolute paths.
+        """
+        return (
+            _resolve_path(self.source, anchor=config_dir),
+            _resolve_path(self.output, anchor=config_dir),
+        )
+
+
 class RunnerConfig(BaseModel):
     """Declarative runner command, executable, arguments, and env."""
 
@@ -187,6 +211,7 @@ class MentaraConfig(BaseModel):
     exclude: tuple[str, ...] = EXCLUDE_DEFAULT
     copy_patterns: tuple[str, ...] = COPY_PATTERNS_DEFAULT
     mix: MIXConfig | None = None
+    assets: AssetsConfig = Field(default_factory=AssetsConfig)
     runner: RunnerConfig | None = None
     linux: PlatformConfig = Field(default_factory=PlatformConfig)
     windows: PlatformConfig = Field(default_factory=PlatformConfig)

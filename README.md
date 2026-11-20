@@ -76,5 +76,28 @@ just fmt        # ruff format
 just check      # fmt-check + ruff check + ty check + pytest
 just cov        # 带覆盖率运行测试
 just build      # 通过 uv_build 构建发布包
-just hooks      # 用 clang + lld 由 hooks/ 重建 overlays/base/MentaraFixes.dll（Syringe 钩子）
+just assets     # 由 assets/ 构建叠层中的生成文件；just assets --check 只检查是否过期
 ```
+
+## 目录结构
+
+```text
+Mentara/
+├── src/mentara/   启动器、叠层/补丁/MIX 引擎，以及通用格式编解码（png、pal、shp、csf）与资源构建器
+├── assets/        可编辑的资源源文件，目录结构与 overlays/ 一一对应
+├── overlays/      叠层本体：手写补丁、上游二进制与由 assets/ 构建出的文件
+└── tests/
+```
+
+`mentara assets` 按后缀把 `assets/<路径>` 编译到 `overlays/<路径>`（可在
+`mentara.toml` 的 `[assets]` 中改 `source`/`output`），不依赖任何特定文件名：
+
+| 源文件 | 生成 | 内容 |
+|---|---|---|
+| `<名>.csf.toml` | `<名>.csf` | `[strings]` 表：标签 = "文本" |
+| `<名>.pal.toml` | `<名>.pal` | `colours = ["#RRGGBB", ...]`，按调色板索引排列 |
+| `<名>.shp.toml` | `<名>.shp` | `sheet`（同目录索引色 PNG）按 `frame = [宽, 高]` 从左到右、从上到下切帧 |
+| `<名>.dll/` | `<名>.dll` | Syringe 钩子 DLL 的 C 源码，用 clang + lld 构建（无 C 运行库） |
+
+其余文件（如 PNG 帧图）是这些源文件的输入。生成文件随仓库提交，玩家无需工具链；
+契约测试会在源文件改动而未重新构建时失败。
