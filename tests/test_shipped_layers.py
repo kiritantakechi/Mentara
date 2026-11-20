@@ -19,6 +19,8 @@ BASE_LAYER = "overlays/base"
 PHOBOS_LAYER = "overlays/phobos"
 _ENGINE_SUFFIXES = frozenset({".dll", ".exe", ".edb", ".pdb"})
 _HIDE_VERSION_RE = re.compile(r"-HideVersionWarning=([^\s\"'`,\]]+)")
+_EXPANSION_MIX_RE = re.compile(r"expandmo\d{2}\.mix")
+_MIX_PATCH_SUFFIX = ".patch.mix"
 
 
 def _layer_files(layer: str) -> list[Path]:
@@ -55,6 +57,30 @@ def test_base_layer_ships_none_of_the_phobos_engine_files() -> None:
     assert not engine_names & {
         path.name.casefold() for path in _layer_files(BASE_LAYER)
     }
+
+
+@pytest.mark.parametrize("layer", [BASE_LAYER, PHOBOS_LAYER])
+def test_new_archives_load_with_the_expansion_mixes(layer: str) -> None:
+    # The engine parses CSF string tables and rules right after it
+    # loads the EXPANDMO##.MIX archives. Archives found later (ECACHE*,
+    # ELOCAL*) left every Phobos label missing, and Phobos crashed
+    # formatting one.
+    base_dir = (PROJECT_DIR / load_config(CONFIG_PATH).base_dir).resolve()
+    existing = (
+        {path.name.casefold() for path in base_dir.glob("*.mix")}
+        if base_dir.is_dir()
+        else set()
+    )
+
+    for path in (PROJECT_DIR / layer).iterdir():
+        name = path.name.casefold()
+        archive = (
+            name.removesuffix(_MIX_PATCH_SUFFIX) + ".mix"
+            if name.endswith(_MIX_PATCH_SUFFIX)
+            else name
+        )
+        if archive.endswith(".mix"):
+            assert archive in existing or _EXPANSION_MIX_RE.fullmatch(archive), path
 
 
 @pytest.mark.parametrize("layer", [BASE_LAYER, PHOBOS_LAYER])

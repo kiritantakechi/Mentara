@@ -45,8 +45,15 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
   `*.pdb` in `.gitignore`), organized cleanly into categorized Westwood MIX
   containers and declarative `.patch.ini` files (zero loose asset clutter in
   the overlay root):
-  - **`ecachephobos.mix/`** (auto-loaded via `ECACHE*.MIX` — custom modern HUD
-    visual assets):
+  - **`expandmo50.mix/`** (a new `EXPANDMO%02d.MIX` archive holding every
+    Phobos-only asset and string). It must be an expansion archive: the
+    engine parses CSF string tables and rules right after the `EXPANDMO`
+    archives load, and only finds `ECACHE*`/`ELOCAL*` archives later. With
+    the files in those, every `PHOBOS:*` label resolved to
+    `MISSING:'PHOBOS:HarvesterLabel'` and Phobos overflowed a fixed
+    `swprintf_s` buffer formatting it, crashing every mission on start
+    (exit `C0000409`). Its number sits below MO's own 94-99 archives, so it
+    can only add files, never shadow MO's.
     - `phdigit.shp` + `phdigit.pal` / `phdigcy.pal`: Condensed `4×6` modernist
       micro-HUD telemetry numerals with directional drop-shadow (no heavy retro
       black borders) for hover unit/building HP and factory progress displays.
@@ -61,11 +68,12 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
       architectural dark carbon-glass SuperWeapon Sidebar docks (`68×52`
       center, `68×10` chamfered caps, `12×40` slim chevron pull-tabs) styled
       for Allies, Soviet, Epsilon, and Foehn.
-  - **`elocalphobos.mix/`** (auto-loaded via `ELOCAL*.MIX` — localization):
     - `stringtable50.csf`: Native Chinese CSF labels for Phobos HUD counters,
       tooltips, game clock (`TXT_GAMETIME`), and hotkey names/descriptions.
-  - **`expandmo99.mix/`** (highest-priority `EXPANDMO%02d.MIX` overrides &
-    config patches):
+      Ares loads `stringtable00`-`99.csf`; MO itself ships 09-11 in
+      `expandmo98.mix`.
+  - **`expandmo99.mix/`** (highest-priority `EXPANDMO%02d.MIX`: replacements of
+    MO's own files and config patches):
     - `place.shp`: Modern translucent holographic building placement grid
       (emerald-mint buildable pads with corner brackets, ice-cyan active
       reticle, coral-crimson blocked pads with isometric `×` cross, and all 16
