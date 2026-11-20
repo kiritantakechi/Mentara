@@ -59,6 +59,16 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
     so the Ares-only and Phobos stacks behave alike and loading both is
     harmless (Ares 3.0p1 alone does not fix it). Syringe walks hook tables
     with a 16-byte stride, so its `syringe.h` aligns each entry to 16.
+    The same DLL fixes LAN and online games with a spectator, which crashed
+    on load (`0x005D6C21`): the CnCNet client writes 90 as a spectator's
+    spawn location, and the first pass that places preset start positions
+    (`0x5D6BE0`, shared by every multiplayer game mode) used it unchecked
+    as an index into the map's 8 start waypoints and into a 16-slot table,
+    reading past a heap buffer (a crash whenever that read crossed into an
+    unmapped page) and writing into `ScenarioClass`. The hook at
+    `0x005D6C1D` skips any index the map does not have; the second pass
+    then places that house as before (a spectator gets YR's observer cell),
+    and preset positions of real players are untouched.
   - **`expandmo99.mix/artmo.patch.ini`**: seven civilian buildings (`CAWHSE`,
     `CAJHUT`, `CANHSE01/02`, `CAPRSNF`, `CASLUMA`, `CABRKK`) name a `cargo`
     palette that no MO archive ships (all 41 other custom palettes ship every
@@ -140,6 +150,18 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
     `Phobos.dll`). Saves are tied to the Phobos version line, and pre-Phobos
     saves are hidden.
   - Source: https://github.com/Phobos-developers/Phobos/releases/tag/v0.5-alpha2
+
+## Known Issues
+
+- Hosting a LAN game can crash the client under Wine ("连线被拒" /
+  connection refused in `LANGameLobby.SetUp`). MO's client starts its LAN
+  listener on a new thread and connects its own lobby to
+  `127.0.0.1:1233` straight away; Windows retries a refused localhost
+  connect for about a second, which hides the race, while Wine fails at
+  once. It happens intermittently (more often while the client is busy,
+  such as right after a game exits or during a CnCNet reconnect) and is
+  independent of the layers; retrying the room usually works. Joining
+  someone else's LAN room is unaffected.
 
 ## Text-Level Patching
 
