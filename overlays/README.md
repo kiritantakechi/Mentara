@@ -39,6 +39,14 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
       task force.
   - Exact duplicates that change nothing (`FOETF055-G`, `FOETF117-G`,
     `ULTITF60-G`, art `[GAOREFBB]`) are left alone.
+  - **`expandmo99.mix/artmo.patch.ini`**: seven civilian buildings (`CAWHSE`,
+    `CAJHUT`, `CANHSE01/02`, `CAPRSNF`, `CASLUMA`, `CABRKK`) name a `cargo`
+    palette that no MO archive ships (all 41 other custom palettes ship every
+    theater variant). The engine already falls back to the theater palette,
+    so the dangling `Palette=cargo` is dropped without changing their look.
+  - **`expandmo99.mix/uimd.patch.ini`**: `[UISettings] CampaignButton=show` is
+    not an Ares value (`default|disable|hide|message|credits|sneakpeek`) and
+    logged "Unrecognized UI action value" on every start; it is `default`.
 - `overlays/phobos/`: Upstream **Phobos `v0.5-alpha2`** (`Phobos.dll`,
   bundled `Syringe.exe` / SyringeEx `0.1.0.2`, `gamemd.edb`,
   `Syringe.LICENSE.txt`, and `Phobos.pdb` which is excluded from Git via
