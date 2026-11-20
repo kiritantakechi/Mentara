@@ -67,7 +67,7 @@ args = [
 ]
 
 [profiles.base]
-description = "Mental Omega Client with MO fixes only (stock Ares, no Phobos)"
+description = "Mental Omega Client with MO fixes only (Ares 3.0p1, no Phobos)"
 layers = ["overlays/base"]
 persist_state = true
 
