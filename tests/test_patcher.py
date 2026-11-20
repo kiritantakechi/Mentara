@@ -125,6 +125,79 @@ def test_ini_patch_set_unset_append_and_delete_section() -> None:
     assert "[BrandNew]\r\n0=FIRST_ITEM\r\n" in merged
 
 
+def test_ini_patch_edits_every_occurrence_of_a_repeated_section() -> None:
+    base_ini = (
+        "[TaskForces]\r\n"
+        "0=TF_A\r\n"
+        "\r\n"
+        "[TF_A]\r\n"
+        "Name=4 Robots Water\r\n"
+        "0=4,ROBOW\r\n"
+        "Group=-1\r\n"
+        "\r\n"
+        "[TF_A]\r\n"
+        "Name=2 Robots\r\n"
+        "0=2,ROBO\r\n"
+        "\r\n"
+        "[TaskForces]\r\n"
+        "1=TF_B\r\n"
+    )
+    patch = parse_ini_patch(
+        "[TF_A]\nName=Fixed\n!Group\nMax=3\n[TaskForces]\n+=TF_C\n",
+        source_path=Path("aimo.patch.ini"),
+    )
+
+    assert apply_ini_patch(base_ini, patch) == (
+        "[TaskForces]\r\n"
+        "0=TF_A\r\n"
+        "\r\n"
+        "[TF_A]\r\n"
+        "Name=Fixed\r\n"
+        "0=4,ROBOW\r\n"
+        "\r\n"
+        "[TF_A]\r\n"
+        "Name=Fixed\r\n"
+        "0=2,ROBO\r\n"
+        "Max=3\r\n"
+        "\r\n"
+        "[TaskForces]\r\n"
+        "1=TF_B\r\n"
+        "2=TF_C\r\n"
+    )
+
+
+def test_ini_patch_delete_then_redefine_collapses_a_repeated_section() -> None:
+    base_ini = (
+        "[Keep]\r\n"
+        "A=1\r\n"
+        "[Dup]\r\n"
+        "0=54,0\r\n"
+        "6=0,1\r\n"
+        "[Keep2]\r\n"
+        "B=2\r\n"
+        "[Dup]\r\n"
+        "0=53,0\r\n"
+    )
+    patch = parse_ini_patch(
+        "[-Dup]\n[Dup]\n0=54,0\n1=0,1\n",
+        source_path=Path("aimo.patch.ini"),
+    )
+
+    assert apply_ini_patch(base_ini, patch) == (
+        "[Keep]\r\nA=1\r\n[Keep2]\r\nB=2\r\n\r\n[Dup]\r\n0=54,0\r\n1=0,1\r\n"
+    )
+
+
+def test_ini_patch_unset_in_an_absent_section_creates_nothing() -> None:
+    base_ini = "; comment\nRoot=1\n[Present]\nA=1\n"
+    patch = parse_ini_patch(
+        "!Root\n[Missing]\n!Key\n[Present]\n!A\n",
+        source_path=Path("x.patch.ini"),
+    )
+
+    assert apply_ini_patch(base_ini, patch) == "; comment\n[Present]\n"
+
+
 def test_toml_patch_applies_symmetric_plaintext_edits(
     tmp_path: Path,
 ) -> None:

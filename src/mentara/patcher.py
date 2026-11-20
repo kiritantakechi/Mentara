@@ -1,7 +1,7 @@
 """Text-level INI/map/KV and TOML overlay patch merging."""
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final, Literal, Self, assert_never
@@ -228,12 +228,16 @@ def parse_ini_patch(text: str, *, source_path: Path) -> INIPatch:
     """Parse a `.patch.{ini,map,yrm,mpr,cfg,inj}` patch document.
 
     Directives may appear either inside `[Section]` blocks or at the
-    top-level root scope (for sectionless `.cfg` and `.inj` files):
-    - `Key=Value`: set or update `Key` (preserving spacing around `=`).
-    - `!Key` or `-Key`: delete `Key`.
-    - `+=Value` or `+Key=Value`: append `Value` using the next integer
-      index in the current section.
-    - `[-Section]`: delete the entire `[Section]` block.
+    top-level root scope (for sectionless `.cfg` and `.inj` files).
+    A section repeated in the target file is edited in every
+    occurrence, so the result does not depend on which duplicate the
+    game engine reads:
+    - `Key=Value`: set or update every `Key` line (preserving spacing
+      around `=`), or append it to the last occurrence if absent.
+    - `!Key` or `-Key`: delete every `Key` line.
+    - `+=Value` or `+Key=Value`: append `Value` to the last occurrence
+      using the next integer index across all occurrences.
+    - `[-Section]`: delete every `[Section]` block.
 
     Args:
         text: Raw UTF-8 text of the patch file.
@@ -324,6 +328,10 @@ def apply_ini_patch(
 ) -> str:
     """Apply an `INIPatch` while preserving comments and line endings.
 
+    The text is parsed once into header-delimited blocks, each section
+    operation rewrites whole blocks, and the blocks are joined again, so
+    a `[Section]` repeated in `base_text` is edited in every occurrence.
+
     Args:
         base_text: Existing INI/map/KV text (empty if creating a file).
         patch: Structured section and key operations.
@@ -336,20 +344,21 @@ def apply_ini_patch(
         return base_text
 
     newline = _detect_newline(base_text, default=default_newline)
-    lines = base_text.splitlines()
-
+    blocks = _parse_ini_blocks(base_text.splitlines())
     for section_op in patch.operations:
         match section_op:
             case INIDeleteSection(section=section):
-                lines = _delete_ini_section(lines, section)
+                folded_name = section.casefold()
+                blocks = tuple(
+                    block for block in blocks if block.folded_name != folded_name
+                )
             case INIUpdateSection(section=section, operations=key_ops):
-                lines = _apply_ini_section_update(lines, section, key_ops)
+                blocks = _update_ini_section(blocks, section, key_ops)
             case _:
                 assert_never(section_op)
 
-    if not lines:
-        return ""
-    return newline.join(lines) + newline
+    lines = [line for block in blocks for line in block.lines]
+    return newline.join(lines) + newline if lines else ""
 
 
 def apply_text_edit(
@@ -589,41 +598,119 @@ def _detect_newline(text: str, *, default: str) -> str:
     return default
 
 
-def _find_section_header_span(
-    lines: Sequence[str],
-    section: str,
-) -> tuple[int, int] | None:
-    target = section.casefold()
-    start_idx: int | None = None
-    for idx, raw_line in enumerate(lines):
-        header = _extract_section_header(raw_line)
-        if header is None:
-            continue
-        if start_idx is None:
-            if header.casefold() == target:
-                start_idx = idx
-        else:
-            return start_idx, idx
-    if start_idx is not None:
-        return start_idx, len(lines)
-    return None
+# A target may repeat a `[Section]` header or a key, and which copy the
+# game honours is engine-specific. Edits therefore address every
+# occurrence, so a patch never depends on that choice.
+@dataclass(frozen=True, slots=True)
+class _INIBlock:
+    # One `[Section]` occurrence, or the root scope before the first
+    # header (the block whose `header` is `None`).
+    folded_name: str | None
+    header: str | None
+    body: tuple[str, ...]
+
+    @property
+    def lines(self) -> tuple[str, ...]:
+        return self.body if self.header is None else (self.header, *self.body)
 
 
-def _root_body_span(lines: Sequence[str]) -> tuple[int, int]:
-    for idx, raw_line in enumerate(lines):
-        if _extract_section_header(raw_line) is not None:
-            return 0, idx
-    return 0, len(lines)
+type _Bodies = tuple[tuple[str, ...], ...]
 
 
-def _find_section_body_span(
-    lines: Sequence[str],
-    section: str,
-) -> tuple[int, int] | None:
-    header_span = _find_section_header_span(lines, section)
-    if header_span is None:
-        return None
-    return header_span[0] + 1, header_span[1]
+def _parse_ini_blocks(lines: Sequence[str]) -> tuple[_INIBlock, ...]:
+    headers = [
+        (idx, name)
+        for idx, line in enumerate(lines)
+        if (name := _extract_section_header(line)) is not None
+    ]
+    # Block boundaries: each header line, then end of text. The first
+    # boundary also ends the root block.
+    bounds = [*(idx for idx, _ in headers), len(lines)]
+    sections = (
+        _INIBlock(name.casefold(), lines[start], tuple(lines[start + 1 : end]))
+        for (start, name), end in zip(headers, bounds[1:], strict=True)
+    )
+    return (_INIBlock(None, None, tuple(lines[: bounds[0]])), *sections)
+
+
+def _update_ini_section(
+    blocks: tuple[_INIBlock, ...],
+    section: str | None,
+    key_ops: Sequence[INIKeyOp],
+) -> tuple[_INIBlock, ...]:
+    folded_name = None if section is None else section.casefold()
+    targets = [
+        idx for idx, block in enumerate(blocks) if block.folded_name == folded_name
+    ]
+    if targets:
+        bodies = _apply_key_ops(tuple(blocks[idx].body for idx in targets), key_ops)
+        updated = list(blocks)
+        for idx, body in zip(targets, bodies, strict=True):
+            updated[idx] = replace(blocks[idx], body=body)
+        return tuple(updated)
+
+    # The root block always exists; only a named section can be absent.
+    (body,) = _apply_key_ops(((),), key_ops)
+    if section is None or not body:
+        return blocks
+    return (*_end_with_blank_line(blocks), _INIBlock(folded_name, f"[{section}]", body))
+
+
+def _end_with_blank_line(blocks: tuple[_INIBlock, ...]) -> tuple[_INIBlock, ...]:
+    *head, last = blocks
+    if last.lines and last.lines[-1].strip():
+        return (*head, replace(last, body=(*last.body, "")))
+    return blocks
+
+
+def _apply_key_ops(bodies: _Bodies, key_ops: Sequence[INIKeyOp]) -> _Bodies:
+    current = bodies
+    for op in key_ops:
+        match op:
+            case INIUnset(key=key):
+                current = tuple(_without_key(body, key) for body in current)
+            case INISet(key=key, value=value):
+                current = _with_key(current, key, value)
+            case INIAppend(value=value):
+                index = max(_next_numeric_key(body) for body in current)
+                current = _append_line(current, f"{index}={value}")
+            case _:
+                assert_never(op)
+    return current
+
+
+def _without_key(body: tuple[str, ...], key: str) -> tuple[str, ...]:
+    folded_key = key.casefold()
+    return tuple(line for line in body if not _has_key(line, folded_key))
+
+
+def _with_key(bodies: _Bodies, key: str, value: str) -> _Bodies:
+    folded_key = key.casefold()
+    if not any(_has_key(line, folded_key) for body in bodies for line in body):
+        return _append_line(bodies, f"{key}={value}")
+    return tuple(
+        tuple(
+            _with_value(line, value) if _has_key(line, folded_key) else line
+            for line in body
+        )
+        for body in bodies
+    )
+
+
+def _append_line(bodies: _Bodies, line: str) -> _Bodies:
+    *head, last = bodies
+    return (*head, _insert_at_body_tail(last, line))
+
+
+def _has_key(line: str, folded_key: str) -> bool:
+    found_key = _extract_key_name(line)
+    return found_key is not None and found_key.casefold() == folded_key
+
+
+def _with_value(line: str, value: str) -> str:
+    before_eq, sep, after_eq = line.partition("=")
+    leading_ws = after_eq[: len(after_eq) - len(after_eq.lstrip(" \t"))]
+    return f"{before_eq}{sep}{leading_ws}{value}"
 
 
 def _extract_section_header(line: str) -> str | None:
@@ -652,80 +739,6 @@ def _extract_key_name(line: str) -> str | None:
     return entry[0] if entry is not None else None
 
 
-def _delete_ini_section(lines: list[str], section: str) -> list[str]:
-    span = _find_section_header_span(lines, section)
-    if span is None:
-        return lines
-    start, end = span
-    return [*lines[:start], *lines[end:]]
-
-
-def _apply_ini_section_update(
-    lines: list[str],
-    section: str | None,
-    key_ops: Sequence[INIKeyOp],
-) -> list[str]:
-    if section is None:
-        body_start, body_end = _root_body_span(lines)
-        updated_body = _apply_key_ops_to_body(lines[body_start:body_end], key_ops)
-        return [*lines[:body_start], *updated_body, *lines[body_end:]]
-
-    body_span = _find_section_body_span(lines, section)
-    if body_span is None:
-        new_body = _apply_key_ops_to_body([], key_ops)
-        if not new_body:
-            return lines
-        updated = list(lines)
-        if updated and updated[-1].strip():
-            updated.append("")
-        updated.append(f"[{section}]")
-        updated.extend(new_body)
-        return updated
-
-    body_start, body_end = body_span
-    updated_body = _apply_key_ops_to_body(lines[body_start:body_end], key_ops)
-    return [*lines[:body_start], *updated_body, *lines[body_end:]]
-
-
-def _apply_key_ops_to_body(
-    body: list[str],
-    key_ops: Sequence[INIKeyOp],
-) -> list[str]:
-    current = list(body)
-    for op in key_ops:
-        match op:
-            case INIUnset(key=key):
-                current = _unset_key_in_body(current, key)
-            case INISet(key=key, value=value):
-                current = _set_key_in_body(current, key, value)
-            case INIAppend(value=value):
-                next_key = str(_next_numeric_key(current))
-                current = _insert_at_body_tail(current, f"{next_key}={value}")
-            case _:
-                assert_never(op)
-    return current
-
-
-def _unset_key_in_body(body: list[str], key: str) -> list[str]:
-    target = key.casefold()
-    return [
-        line for line in body if (_extract_key_name(line) or "").casefold() != target
-    ]
-
-
-def _set_key_in_body(body: list[str], key: str, value: str) -> list[str]:
-    target = key.casefold()
-    updated = list(body)
-    for idx, raw_line in enumerate(updated):
-        found_key = _extract_key_name(raw_line)
-        if found_key is not None and found_key.casefold() == target:
-            before_eq, sep, after_eq = raw_line.partition("=")
-            leading_ws = after_eq[: len(after_eq) - len(after_eq.lstrip(" \t"))]
-            updated[idx] = f"{before_eq}{sep}{leading_ws}{value}"
-            return updated
-    return _insert_at_body_tail(updated, f"{key}={value}")
-
-
 def _next_numeric_key(body: Sequence[str]) -> int:
     max_index = -1
     for line in body:
@@ -735,11 +748,11 @@ def _next_numeric_key(body: Sequence[str]) -> int:
     return max_index + 1
 
 
-def _insert_at_body_tail(body: list[str], new_line: str) -> list[str]:
+def _insert_at_body_tail(body: tuple[str, ...], new_line: str) -> tuple[str, ...]:
     insert_at = len(body)
     while insert_at > 0 and not body[insert_at - 1].strip():
         insert_at -= 1
-    return [*body[:insert_at], new_line, *body[insert_at:]]
+    return (*body[:insert_at], new_line, *body[insert_at:])
 
 
 def _replace_text(
