@@ -42,19 +42,34 @@ command = []
 executable = "MentalOmegaClient.exe"
 args = []
 
+# Layers stack bottom to top: the game directory, then `overlays/base`
+# (Ares-only fixes to Mental Omega itself), then `overlays/phobos`
+# (Phobos engine fixes and modernization built on the fixed game).
+
 [profiles.default]
-description = "Mental Omega Client with Phobos v0.5-alpha2 and base overlay"
-layers = ["overlays/phobos", "overlays/base"]
+description = "Mental Omega Client: MO fixes + Phobos modernization"
+layers = ["overlays/base", "overlays/phobos"]
 persist_state = true
 
 [profiles.syringe]
-description = "Launch gamemd.exe via SyringeEx (Phobos v0.5-alpha2 + base overlay)"
-layers = ["overlays/phobos", "overlays/base"]
+description = "gamemd.exe via SyringeEx: MO fixes + Phobos modernization"
+layers = ["overlays/base", "overlays/phobos"]
 persist_state = true
 
 [profiles.syringe.runner]
 executable = "Syringe.exe"
-args = ["gamemd.exe", "--args=-SPAWN -CD -SPEEDCONTROL -LOG"]
+# Same game flags as the client launch line in
+# overlays/phobos/Resources/ClientDefinitions.patch.ini. Without
+# -AFFINITY, Ares pins the game to a single CPU.
+args = [
+    "gamemd.exe",
+    "--args=-SPAWN -CD -SPEEDCONTROL -LOG -AFFINITY:1048575 -HideVersionWarning=0.5.0.0-alpha2",
+]
+
+[profiles.base]
+description = "Mental Omega Client with MO fixes only (stock Ares, no Phobos)"
+layers = ["overlays/base"]
+persist_state = true
 
 [profiles.vanilla]
 description = "Clean base Mental Omega without overlay layers"
