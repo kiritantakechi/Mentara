@@ -204,7 +204,10 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
       and lasers that follow their unit, turret recoil, and the opt-in
       vanilla fixes
       `DisableOveroptimizationInTargeting`, `AllowWeaponSelectAgainstWalls`,
-      `[AI] EnablePowerSurplus`, and detail-aware light flashes.
+      `[AI] EnablePowerSurplus`, detail-aware light and combat flashes
+      (coloured ones included), and bombs stuck to a building (Ivan, C4,
+      Arsonist and the like) shown and detonated at its centre instead of
+      its top-left cell.
     - Several of these keys change gameplay, so online games need every player
       on the same profile.
   - **`expandmo96.mix/`**: `tab0{0..3}pp.shp`, the production bars, one set
