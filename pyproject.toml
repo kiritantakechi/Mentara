@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Virtual overlay launcher for Mental Omega."
 readme = "README.md"
 requires-python = ">=3.15"
-license = "MIT"
+license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [
     { name = "Kiritan", email = "kiritantakechi@gmail.com" },

@@ -103,3 +103,21 @@ Mentara/
 
 其余文件（如 PNG 帧图）是这些源文件的输入。生成文件随仓库提交，玩家无需工具链；
 契约测试会在源文件改动而未重新构建时失败。
+
+## 许可证
+
+Mentara 以 [GNU 通用公共许可证第 3 版或任何更高版本](LICENSE)（GPL-3.0-or-later）
+发布，版权所有 © 2026 Kiritan。
+
+`overlays/` 随附的上游二进制与 Mentara 只是聚合分发，各自沿用原许可证：
+
+| 文件 | 来源 | 许可证 | 源码 |
+|---|---|---|---|
+| `overlays/phobos/Phobos.dll`、`gamemd.edb` | Phobos `v0.5-alpha2` | GPL-3.0（同 [`LICENSE`](LICENSE)） | <https://github.com/Phobos-developers/Phobos/tree/v0.5-alpha2> |
+| `overlays/phobos/Syringe.exe` | SyringeEx `0.1.0.2` | LGPL-3.0（[`Syringe.LICENSE.txt`](overlays/phobos/Syringe.LICENSE.txt)） | <https://github.com/Phobos-developers/SyringeEx> |
+| `overlays/base/Ares.dll`、`Ares.dll.inj` | Ares `3.0p1` | 四条款 BSD（[`Ares.LICENSE.txt`](overlays/base/Ares.LICENSE.txt)） | <https://github.com/Ares-Developers/Ares> |
+
+This product includes software developed by the Ares Contributors.
+
+仓库不含 Mental Omega 的游戏文件：叠层只有补丁与原创资源，运行时需要自备
+Mental Omega 3.3.6。
