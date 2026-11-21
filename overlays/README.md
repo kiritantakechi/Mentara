@@ -366,6 +366,21 @@ profile may stop at any layer but never skips one (a contract test checks
       (Tesla EMP, driver kill, slows, marks, garrison clearing) through an
       airburst helper weapon carry it as `ExtraWarheads`, landing on the
       impact point instead of a cluster cell beside it.
+  - Rules in the third wave:
+    - **self-superweapon** also covers Nanocharge, whose invisible 1 HP
+      seeker existed only to die and set off its warhead.
+    - **stack-cap** also covers the Syncronaut: its bond rides the rider
+      warhead onto its target and counts towards the same 3 bonds. MO let
+      three Syncronauts stack x7.45 damage taken; the cap holds x1.95.
+    - **carrier**: since rank now reaches the craft, carriers take 50% of
+      their craft's kill value instead of 75%, so they rank up after 1.5x
+      the kills (an elite Enterprise's Hornets hit twice as hard).
+    - **iron-curtain**: player-controlled units neither pick nor return
+      fire at targets under the Iron Curtain or Iron Guard, as the AI
+      already did (`AutoTarget.IronCurtained=false`); force-fire still
+      works.
+    - **rider** takes helpers of any damage: the Riot Trooper's stun, the
+      Rahn's Clairvoyant kill and the Cryocopter's freeze stages.
   - Checked in game (skirmish scenes; superweapons charged by a test-only
     probe layer stacked on `enhance`):
     - The aura buildings fire with no target (buffs, cloaking, repair 293
@@ -396,6 +411,13 @@ profile may stop at any layer but never skips one (a contract test checks
       weapon lock and the Scourge's EMP all apply.
     - The Syncronin's bond attaches to a barracks.
     - An eight-AI skirmish runs nine minutes with no error in the log.
+    - Third wave: Nanocharge fires on one click from its add-on and rings
+      both damaged Mastodons; a Syncronaut's bond attaches through its
+      rider warhead; the Riot Trooper, the Rahn (a Clairvoyant dies, not
+      mutates) and the Cryocopter's freeze stages work as under MO. Not
+      played: the iron-curtain targeting (checked in Phobos' source:
+      human-owned units skip iron-curtained targets when auto-targeting
+      and retaliating) and the carriers' slower promotion (numbers only).
   - It changes gameplay, so online games need every player on `enhance`.
 
 ## Known Issues
