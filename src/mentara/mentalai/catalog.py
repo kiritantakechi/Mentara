@@ -20,6 +20,7 @@ __all__ = [
     "Firepower",
     "Kind",
     "Role",
+    "TeamCast",
     "Unit",
     "build_catalog",
 ]
@@ -67,6 +68,9 @@ class Role(StrEnum):
     MCV = "mcv"
     DEPLOYER = "deployer"
     DOCKED = "docked"
+    OCCUPIER = "occupier"
+    HIJACKER = "hijacker"
+    STEALTH = "stealth"
 
 
 # The engine's base armour classes, in the order `Verses=` lists them.
@@ -111,6 +115,8 @@ _TIER_3_TECH_LEVEL: Final[int] = 8
 # Ares's targeting mode for a superweapon only a team script fires.
 _TEAM_CAST: Final[str] = "ironcurtain"
 _CHRONOSPHERE: Final[str] = "chronosphere"
+_IRON_CURTAIN: Final[str] = "ironcurtain"
+_WARHEAD_CAST: Final[str] = "genericwarhead"
 _GRANT_KEYS: Final[tuple[str, ...]] = ("SuperWeapon", "SuperWeapon2")
 # YR's built-in rockets: the `[General]` key prefix and warhead key.
 _ROCKETS: Final[tuple[tuple[str, str], ...]] = (
@@ -146,6 +152,9 @@ class Firepower:
         lobbed: Whether a long ground weapon arcs or launches craft.
         heals: Whether a weapon heals infantry.
         repairs: Whether a weapon repairs vehicles.
+        against: Best ground damage per second against each armour in
+            the rules, by lower-case armour name.
+        air_against: The same for anti-air weapons.
     """
 
     infantry: float
@@ -158,6 +167,8 @@ class Firepower:
     lobbed: bool
     heals: bool
     repairs: bool
+    against: Mapping[str, float]
+    air_against: Mapping[str, float]
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +185,9 @@ class Unit:
         firepower: Its damage profile.
         roles: Every role tag it carries.
         passengers: Transport capacity.
+        armor: Its armour, lower-case.
+        size: The room it takes in a transport.
+        size_limit: The largest passenger a transport takes.
     """
 
     id: str
@@ -185,6 +199,9 @@ class Unit:
     firepower: Firepower
     roles: frozenset[Role]
     passengers: int
+    armor: str
+    size: int
+    size_limit: int
 
     def has(self, *roles: Role) -> bool:
         """Whether the unit carries every role given.
@@ -199,28 +216,55 @@ class Unit:
 
 
 @dataclass(frozen=True, slots=True)
+class TeamCast:
+    """A superweapon only a team fires: Ares action 55 on its group.
+
+    Attributes:
+        group: Its `SW.Group`.
+        name: The superweapon's ID.
+        building: A building that grants it.
+        home: Whether it belongs at home: it delivers only harvesters.
+        curtain: Whether it is an Iron Curtain (`Type=IronCurtain`).
+        affects: For a warhead cast, the armours it changes (any
+            `Versus` other than 0); None for other kinds.
+    """
+
+    group: int
+    name: str
+    building: str
+    home: bool
+    curtain: bool
+    affects: frozenset[str] | None
+
+
+@dataclass(frozen=True, slots=True)
 class Country:
     """A playable country and what its AI can field.
 
     Attributes:
         id: The country's ID.
         side: Its 1-based index in `[Sides]`, as AI triggers number
-            sides. units: Each unit it can field, mapped to the tier it
-            unlocks at. buildings: Every building it can own,
-            lower-case. factories: The first building of each factory
-            kind it can own. gates: For tiers 2 and 3, the building that
-            unlocks most of its
+            sides.
+        units: Each unit it can field, mapped to the tier it unlocks at.
+        buildings: Every building it can own, lower-case.
+        factories: The first building of each factory kind it can own.
+        gates: For tiers 2 and 3, the building that unlocks most of its
             units of that tier.
         construction_yard: The yard its MCV deploys into.
         mcv: Its MCV.
         docks: Pads of its first airfield, which bound how many
             airfield-bound aircraft it can keep.
-        front_casts: `SW.Group`s of the team-cast superweapons it can
-            own that act where a team stands (buffs, area effects,
-            delivered fighters), in group order.
-        base_casts: `SW.Group`s of the team-cast superweapons that
-            deliver harvesters, which belong at home.
+        casts: The team-cast superweapons it can own, by group.
         chronosphere: Whether it can own a Chronosphere the AI may use.
+        airfields: The aircraft factories it can own.
+        superweapon_buildings: The buildings at the top tech level it
+            can own that grant a superweapon the AI uses: its strategic
+            superweapons.
+        absorber: A power plant it can own that infantry enter to boost
+            (`InfantryAbsorb`), or "".
+        tank_bunker: A tank bunker it can own (`Bunker`), or "".
+        battle_bunker: A building it can own that its infantry occupy
+            (`CanBeOccupied`), or "".
     """
 
     id: str
@@ -232,9 +276,29 @@ class Country:
     construction_yard: str
     mcv: str
     docks: int
-    front_casts: tuple[int, ...]
-    base_casts: tuple[int, ...]
+    casts: tuple[TeamCast, ...]
     chronosphere: bool
+    airfields: tuple[str, ...]
+    superweapon_buildings: tuple[str, ...]
+    absorber: str
+    tank_bunker: str
+    battle_bunker: str
+
+    @property
+    def front_casts(self) -> tuple[int, ...]:
+        """Groups cast where a team fights, in group order."""
+        return tuple(sorted({c.group for c in self.casts if not c.home}))
+
+    @property
+    def base_casts(self) -> tuple[int, ...]:
+        """Groups cast at home, in group order."""
+        front = set(self.front_casts)
+        return tuple(sorted({c.group for c in self.casts if c.home} - front))
+
+    @property
+    def curtain(self) -> int | None:
+        """The Iron Curtain's group, if the country casts one."""
+        return next((c.group for c in self.casts if c.curtain), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,12 +340,14 @@ def build_catalog(rules: IniData) -> Catalog:
         The catalog.
     """
     reader = _Reader(rules)
-    units = {
-        name.lower(): reader.unit(name, kind)
+    names = [
+        (name, kind)
         for kind in Kind
         for name in rules.type_list(kind.value)
         if rules.has(name)
-    }
+    ]
+    armors = sorted({(rules.get(name, "Armor") or "none").lower() for name, _ in names})
+    units = {name.lower(): reader.unit(name, kind, armors) for name, kind in names}
     countries = tuple(
         reader.country(country, side)
         for side, side_key in enumerate(rules.keys("Sides"), start=1)
@@ -292,9 +358,9 @@ def build_catalog(rules: IniData) -> Catalog:
 
 
 class _Superweapons(TypedDict):
-    front_casts: tuple[int, ...]
-    base_casts: tuple[int, ...]
+    casts: tuple[TeamCast, ...]
     chronosphere: bool
+    superweapon_buildings: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,12 +392,21 @@ class _Reader:
             groups.setdefault(group, _lowered(members))
         self._groups = groups
         self._buildings = tuple(rules.type_list("BuildingTypes"))
+        self._armors = tuple(
+            sorted(
+                {
+                    (rules.get(name, "Armor") or "none").lower()
+                    for kind in Kind
+                    for name in rules.type_list(kind.value)
+                }
+            )
+        )
 
     # --- Units -------------------------------------------------------
 
-    def unit(self, name: str, kind: Kind) -> Unit:
+    def unit(self, name: str, kind: Kind, armors: Iterable[str]) -> Unit:
         rules = self._rules
-        firepower = self._firepower(name)
+        firepower = self._firepower(name, tuple(armors))
         roles = self._roles(name, kind, firepower)
         return Unit(
             id=rules.name(name),
@@ -343,6 +418,9 @@ class _Reader:
             firepower=firepower,
             roles=roles,
             passengers=int(_number(rules.get(name, "Passengers"))),
+            armor=(rules.get(name, "Armor") or "none").lower(),
+            size=int(_number(rules.get(name, "Size"), 1.0)),
+            size_limit=int(_number(rules.get(name, "SizeLimit"))),
         )
 
     def _factory_kind(self, name: str, kind: Kind) -> Factory:
@@ -401,6 +479,9 @@ class _Reader:
             ),
             (self._deploys_into_yard(name), Role.MCV),
             (_yes(rules.get(name, "AirportBound")), Role.DOCKED),
+            (_yes(rules.get(name, "Occupier")), Role.OCCUPIER),
+            (_yes(rules.get(name, "VehicleThief")), Role.HIJACKER),
+            (_yes(rules.get(name, "Cloakable")), Role.STEALTH),
             (
                 bool(rules.get(name, "DeploysInto"))
                 and not self._deploys_into_yard(name),
@@ -440,7 +521,7 @@ class _Reader:
 
     # --- Weapons -----------------------------------------------------
 
-    def _firepower(self, name: str) -> Firepower:
+    def _firepower(self, name: str, armors: tuple[str, ...]) -> Firepower:
         weapons = [w for w in self._weapons(name) if w.damage != 0]
         ground = [w for w in weapons if w.anti_ground]
         # LandTargeting=1 keeps a unit off land targets; a ship still
@@ -463,7 +544,23 @@ class _Reader:
             lobbed=any(w.lobbed and w.range >= _LOBBED_RANGE_MIN for w in ground),
             heals=any(self._mends(w, _INFANTRY_ARMORS) for w in weapons),
             repairs=any(self._mends(w, _VEHICLE_ARMORS) for w in weapons),
+            against={
+                a: self._best(self._hitting(a, land, ground), (a,)) for a in armors
+            },
+            air_against={a: self._best(air, (a,)) for a in armors},
         )
+
+    def _hitting(
+        self,
+        armor: str,
+        land: list[_Weapon],
+        ground: list[_Weapon],
+    ) -> list[_Weapon]:
+        """The weapons that reach a unit of this armour on the ground.
+
+        A ship's anti-ship weapons hit vehicle armours only.
+        """
+        return ground if self._base_armor(armor) in _VEHICLE_ARMORS else land
 
     def _weapons(self, name: str) -> list[_Weapon]:
         rules = self._rules
@@ -695,7 +792,36 @@ class _Reader:
             construction_yard=rules.name(yard),
             mcv=rules.name(mcv),
             docks=int(_number(rules.get(airfield, "NumberOfDocks"))),
+            airfields=self._producing(owned, Factory.AIRFIELD),
+            absorber=self._flagged(owned, "InfantryAbsorb", powered=True),
+            tank_bunker=self._flagged(owned, "Bunker", powered=False),
+            battle_bunker=self._flagged(owned, "CanBeOccupied", powered=False),
             **self._superweapons(owned),
+        )
+
+    def _producing(self, owned: frozenset[str], kind: Factory) -> tuple[str, ...]:
+        return tuple(
+            self._rules.name(b)
+            for b in self._buildings
+            if b.lower() in owned and self._produces(b) is kind
+        )
+
+    def _flagged(self, owned: frozenset[str], key: str, *, powered: bool) -> str:
+        """The first building the country can own with a flag set.
+
+        With `powered`, only one that makes power counts: infantry
+        entering such a building boost its output.
+        """
+        rules = self._rules
+        return next(
+            (
+                rules.name(b)
+                for b in self._buildings
+                if b.lower() in owned
+                and _yes(rules.get(b, key))
+                and (not powered or _number(rules.get(b, "Power")) > 0)
+            ),
+            "",
         )
 
     def _superweapons(self, owned: frozenset[str]) -> _Superweapons:
@@ -708,14 +834,17 @@ class _Reader:
         fights.
         """
         rules = self._rules
-        front: set[int] = set()
-        base: set[int] = set()
+        casts: dict[tuple[int, str], TeamCast] = {}
         chronosphere = False
-        for name in self._granted(owned):
+        buildings: list[str] = []
+        for building, name in self._grants(owned):
             if rules.get(name, "SW.AllowAI") is not None and not _yes(
                 rules.get(name, "SW.AllowAI")
             ):
                 continue
+            level = int(_number(rules.get(building, "TechLevel")))
+            if level >= _TECH_LEVEL_MAX:
+                buildings.append(building)
             kind = (rules.get(name, "Type") or "").lower()
             targeting = (rules.get(name, "SW.AITargeting") or "").lower()
             if kind == _CHRONOSPHERE and targeting != _TEAM_CAST:
@@ -725,26 +854,42 @@ class _Reader:
                 continue
             group = int(_number(rules.get(name, "SW.Group")))
             delivered = split_list(rules.get(name, "Deliver.Types"))
-            if delivered and all(self._harvests(unit) for unit in delivered):
-                base.add(group)
-            else:
-                front.add(group)
+            casts.setdefault(
+                (group, name.lower()),
+                TeamCast(
+                    group=group,
+                    name=rules.name(name),
+                    building=building,
+                    home=bool(delivered)
+                    and all(self._harvests(unit) for unit in delivered),
+                    curtain=kind == _IRON_CURTAIN,
+                    affects=self._affects(name) if kind == _WARHEAD_CAST else None,
+                ),
+            )
         return {
-            "front_casts": tuple(sorted(front)),
-            "base_casts": tuple(sorted(base - front)),
+            "casts": tuple(sorted(casts.values(), key=lambda c: (c.group, c.name))),
             "chronosphere": chronosphere,
+            "superweapon_buildings": tuple(dict.fromkeys(buildings)),
         }
 
-    def _granted(self, owned: frozenset[str]) -> tuple[str, ...]:
+    def _affects(self, superweapon: str) -> frozenset[str]:
+        warhead = self._rules.get(superweapon, "SW.Warhead") or ""
+        return frozenset(
+            armor for armor in self._armors if self._versus(warhead, armor) != 0
+        )
+
+    def _grants(self, owned: frozenset[str]) -> tuple[tuple[str, str], ...]:
         rules = self._rules
-        granted: list[str] = []
+        grants: list[tuple[str, str]] = []
         for building in self._buildings:
             if building.lower() not in owned:
                 continue
             names = [rules.get(building, key) or "" for key in _GRANT_KEYS]
             names.extend(split_list(rules.get(building, "SuperWeapons")))
-            granted.extend(name for name in names if rules.has(name))
-        return tuple(dict.fromkeys(granted))
+            grants.extend(
+                (rules.name(building), name) for name in names if rules.has(name)
+            )
+        return tuple(grants)
 
     def _harvests(self, unit: str) -> bool:
         rules = self._rules

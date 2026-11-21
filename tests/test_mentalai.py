@@ -7,10 +7,14 @@ import pytest
 
 from mentara.mentalai import IniData, build_catalog, plan_ai
 from mentara.mentalai.catalog import Factory, Role
-from mentara.mentalai.emit import render_ai_fragment, render_option_fragment
+from mentara.mentalai.emit import (
+    render_ai_fragment,
+    render_option_fragment,
+    render_rules_fragment,
+)
 from mentara.mentalai.generate import AI_FRAGMENT, OPTION_FRAGMENT
 from mentara.mentalai.ini import split_list
-from mentara.mentalai.teams import Comparison
+from mentara.mentalai.model import Comparison, Condition
 
 # One side with one country. Its yard unlocks a barracks and a war
 # factory (tier 1), a radar (tech level 5, tier 2) and labs (tech level
@@ -154,6 +158,7 @@ Owner=Alpha
 Prerequisite=PILE
 Cost=200
 Strength=125
+Occupier=yes
 Primary=Rifle
 
 [MEDIC]
@@ -348,10 +353,10 @@ def test_the_ai_fields_units_behind_a_lock_no_house_builds(rules: IniData) -> No
 def test_a_line_mixes_roles_and_its_front_leads(rules: IniData) -> None:
     plan = plan_ai(build_catalog(rules))
     lines = {tf.id: tf for tf in plan.task_forces}
-    tier_1 = lines["MNTTF101AL-G"].members
+    tier_1 = lines["MNTTF0101AL-G"].members
     assert tier_1[0] == (4, "TANK")
     assert {unit for _, unit in tier_1} >= {"TANK", "GI", "FLAK"}
-    tier_3 = {unit for _, unit in lines["MNTTF103AL-G"].members}
+    tier_3 = {unit for _, unit in lines["MNTTF0103AL-G"].members}
     assert {"ARTY", "HERO", "MEDIC"} <= tier_3
     assert plan.leadership["TANK"] > plan.leadership["HERO"]
     assert plan.leadership["HERO"] > plan.leadership["GI"]
@@ -359,12 +364,12 @@ def test_a_line_mixes_roles_and_its_front_leads(rules: IniData) -> None:
 
 def test_triggers_hold_each_tier_back(rules: IniData) -> None:
     triggers = {t.id: t for t in plan_ai(build_catalog(rules)).triggers}
-    first = triggers["MNTTR101AL-G"]
-    assert (first.condition_object, first.comparison) == ("RADR", Comparison.LESS)
-    third = triggers["MNTTR103AL-G"]
-    assert (third.condition_object, third.comparison) == ("LABS", Comparison.AT_LEAST)
-    mcv = triggers["MNTTR800AL-G"]
-    assert (mcv.condition_object, mcv.comparison) == ("YARD", Comparison.LESS)
+    first = triggers["MNTTR0101AL-G"].gate
+    assert (first.building, first.comparison) == ("RADR", Comparison.LESS)
+    third = triggers["MNTTR0103AL-G"].gate
+    assert (third.building, third.comparison) == ("LABS", Comparison.AT_LEAST)
+    mcv = triggers["MNTTR9900AL-G"].gate
+    assert (mcv.building, mcv.comparison) == ("YARD", Comparison.LESS)
 
 
 def test_task_forces_stay_within_engine_limits(rules: IniData) -> None:
@@ -384,7 +389,8 @@ def test_the_option_fragment_gates_and_enables_every_trigger(rules: IniData) -> 
         fields = (option.get("AITriggerTypes", trigger.id) or "").split(",")
         assert len(fields) == 18
         amount, operator = struct.unpack("<II", bytes.fromhex(fields[6][:16]))
-        assert (amount, operator) == (trigger.amount, int(trigger.comparison))
+        gate = trigger.gate
+        assert (amount, operator) == (gate.amount, int(gate.comparison))
     assert option.get("TANK", "LeadershipRating") == str(plan.leadership["TANK"])
 
 
@@ -403,9 +409,9 @@ def test_airfield_bound_strikes_fit_the_pads(rules: IniData) -> None:
     # An aircraft with no free pad is never built: the tier-2 and tier-3
     # strikes, one team each, share one airfield's four pads.
     plan = plan_ai(build_catalog(rules))
-    strike = {tf.id: tf for tf in plan.task_forces}["MNTTF402AL-G"]
+    strike = {tf.id: tf for tf in plan.task_forces}["MNTTF1302AL-G"]
     assert strike.members == ((2, "JET"),)
-    team = {t.id: t for t in plan.teams}["MNTTT402AL-G"]
+    team = {t.id: t for t in plan.teams}["MNTTT1302AL-G"]
     assert team.max_teams == 1
     # Mental AI clones every unit per extra factory; a clone has no pad.
     option = IniData.parse(render_option_fragment(plan))
@@ -424,21 +430,54 @@ def test_lines_cast_at_the_front_and_the_watch_at_home(rules: IniData) -> None:
     plan = plan_ai(build_catalog(rules))
     teams = {t.id: t for t in plan.teams}
     scripts = {s.id: s for s in plan.scripts}
-    line = scripts[teams["MNTTT103AL-G"].script]
-    assert line.id == "MNTSC100AL-G"
+    line = scripts[teams["MNTTT0103AL-G"].script]
+    assert line.id == "MNTSC1000AL-G"
     assert (55, 0) in line.lines
     assert line.lines.index((55, 0)) < line.lines.index((0, 7))
-    watch = scripts[teams["MNTTT503AL-G"].script]
+    watch = scripts[teams["MNTTT1503AL-G"].script]
     assert (55, 17) in watch.lines
     assert (55, 14) not in line.lines + watch.lines
 
 
 def test_the_chrono_assault_waits_for_the_sphere(rules: IniData) -> None:
     plan = plan_ai(build_catalog(rules))
-    trigger = {t.id: t for t in plan.triggers}["MNTTR803AL-G"]
-    assert (int(trigger.condition), trigger.condition_object) == (6, "<none>")
-    members = {tf.id: tf for tf in plan.task_forces}["MNTTF803AL-G"].members
+    gate = {t.id: t for t in plan.triggers}["MNTTR3501AL-G"].gate
+    assert (gate.condition, gate.building) == (Condition.CHRONOSPHERE_CHARGED, "<none>")
+    members = {tf.id: tf for tf in plan.task_forces}["MNTTF3501AL-G"].members
     assert {unit for _, unit in members} == {"TANK", "ARTY", "FLAK"}
+
+
+def test_notable_enemy_units_raise_counters(rules: IniData) -> None:
+    # The house waits until its enemy owns some of a costly unit, then
+    # hunts every unit of that armour through a Phobos target list.
+    plan = plan_ai(build_catalog(rules))
+    counters = [t for t in plan.triggers if t.gate.condition is Condition.ENEMY_OWNS]
+    hunted = {t.gate.building for t in counters}
+    assert {"ARTY", "HERO"} <= hunted
+    assert "GI" not in hunted
+    arty = next(t for t in counters if t.gate.building == "ARTY")
+    assert arty.gate.amount == 2
+    hero = next(t for t in counters if t.gate.building == "HERO")
+    assert hero.gate.amount == 1
+    rules_fragment = IniData.parse(render_rules_fragment(plan))
+    lists = [
+        rules_fragment.get("AITargetTypes", str(i))
+        for i in range(len(plan.target_lists))
+    ]
+    assert any("ARTY" in (value or "") for value in lists)
+
+
+def test_enemy_airfields_raise_the_sky_guard(rules: IniData) -> None:
+    plan = plan_ai(build_catalog(rules))
+    guards = [t for t in plan.triggers if t.gate.building == "AIRF"]
+    assert guards
+    assert all(t.gate.condition is Condition.ENEMY_OWNS for t in guards)
+
+
+def test_occupiers_garrison_buildings(rules: IniData) -> None:
+    plan = plan_ai(build_catalog(rules))
+    garrison = {tf.id: tf for tf in plan.task_forces}["MNTTF2100AL-G"]
+    assert garrison.members == ((5, "GI"),)
 
 
 ENHANCE = Path(__file__).resolve().parents[1] / "overlays" / "enhance"

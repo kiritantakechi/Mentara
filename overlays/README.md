@@ -428,6 +428,8 @@ profile may stop at any layer but never skips one (a contract test checks
     TeamTypes, generated.
   - **`INI/Game Options/Mental AI.patch.ini/`**: the Mental AI's
     triggers, generated into the client's "Mental AI Boost" option.
+  - **`expandmo99.mix/rulesmo.patch.ini/mentalai.ini`**: the Mental
+    AI's Phobos target lists, generated.
   - **Mental AI** ("终结级AI强化", MO's "Mental AI Boost" game option).
     MO's option only made the AI faster and richer: shorter team delays,
     factory cloning, start cash, a larger harvest bonus and more
@@ -442,48 +444,96 @@ profile may stop at any layer but never skips one (a contract test checks
       sit in aimo.ini under fresh IDs, where nothing refers to them in a
       normal game. Redefining an MO TeamType from the map is avoided: a
       probe that changed only its `Script=` lost the whole team.
-    - `mentara mentalai -p enhance` (`just mentalai`) generates both
-      fragments from the profile's rendered rules; `--check` reports
-      stale output. The generator (`src/mentara/mentalai/`) names no
+    - `mentara mentalai -p enhance` (`just mentalai`) generates the
+      three fragments from the profile's rendered rules; `--check`
+      reports stale output. The generator (`src/mentara/mentalai/`) names no
       unit: roles come from each unit's weapons against each armour
       class (damage per second against infantry, vehicles, buildings and
       aircraft), its hull and its flags (main battle tank, anti-infantry
       screen, anti-air, artillery, siege, healer or repairer, detector,
-      hero, engineer, infiltrator). A country fields a unit if
+      hero, engineer, infiltrator, occupier, hijacker, stealth), and its
+      damage against every armour in the rules. A country fields a unit if
       `Owner`/`RequiredHouses`/`ForbiddenHouses` and its prerequisites
       allow it from the buildings the country can own; a prerequisite
       no house can build (MO's `AILOCK`) is skipped, because the AI does
       not check unit prerequisites when it fills a team. A unit's tier
       is the tech level of the building that unlocks it (up to 4, 5-7,
       8 and up).
-    - Teams per country, each a set of role slots filled by the
-      best-scoring unit the country fields at that tier (at most six
-      member types): a combined-arms **line** at every tier (four front
-      tanks, an anti-infantry screen, anti-air, from tier 2 artillery,
-      a healer or repairer and a detector, at tier 3 a hero); a
-      **siege** group (artillery that out-damages buildings, with tanks,
-      screen and anti-air); fast **raids** on harvesters and
-      refineries; **air strikes** on the class the craft hurts most;
-      **base watch** teams; **engineers** for tech buildings; **spies**;
-      a **navy** once a shipyard stands; and an MCV when the yard is
-      lost. The AI skips unit prerequisites, so each trigger holds its
-      tier back: tier 1 runs until the country owns its tier-2 building
-      (the one that unlocks most of that tier), higher tiers once it
-      owns theirs.
+    - Volume: about 170 triggers per country, 2,000 in all on 1,400
+      teams (MO's own AI has 1,200 triggers). Each team is a set of role
+      slots, each filled by the best-scoring unit the country fields at
+      the team's tier (at most six member types). The AI skips unit
+      prerequisites, so each trigger holds its tier back: tier 1 runs
+      until the country owns its tier-2 building (the one that unlocks
+      most of that tier), higher tiers once it owns theirs.
+    - Assault: a combined-arms **line** at every tier (four front
+      tanks, an anti-infantry screen, anti-air, from tier 2 artillery, a
+      healer or repairer and a detector, at tier 3 a hero) in three
+      forms: **direct** (stage outside the base, break the defences,
+      raze it), **flank** (Phobos 10056 drives round to the chosen
+      enemy's farthest building and hits the base from behind) and
+      **hunt** (each member hunts the army). From tier 2 a second trigger
+      launches the line with the tier's **air strike** as Team2, in the
+      same frame, and so a **siege** group (artillery that out-damages
+      buildings, with tanks, screen and anti-air). **Factory blitzes**
+      and **power raids** (fast vehicles that hurt buildings),
+      **economy raids** on harvesters and refineries, **stealth raids**
+      by cloaked units, and **feints**: fast units hit the chosen
+      enemy's farthest buildings (Phobos 10005) to pull the defence away
+      from the lines.
+    - Counters: every enemy unit worth answering (costing 1,000 or
+      more, flying, shelling from the sea, or a hero) has a trigger per
+      country that waits until the house's chosen enemy owns two (one
+      of a hero or anything costing 2,000). It raises a squad of the
+      units that do the most damage for their cost against that unit's
+      own armour (custom armours included), shared by every enemy unit
+      of the armour, which hunts them through a Phobos `[AITargetTypes]`
+      list (`rulesmo.patch.ini/mentalai.ini`, where indices stay fixed)
+      and raises its trigger's weight on each kill (Phobos 14000). Air
+      is answered by anti-air holding the base, and so is an enemy
+      airfield (**sky guard**). When the enemy owns a strategic
+      superweapon (a top-tech-level building, as MO's own snipe teams
+      chose), a **superweapon snipe** goes for it.
+    - Infiltration and holding ground: **spies** against power, radar,
+      war factories, barracks, refineries, superweapons and tech labs;
+      **engineer drops** that load into a transport (Phobos 10103),
+      drive next to power, a factory or the yard, unload and capture
+      it; **hijackers** (Ares 67); **garrisons** of civilian buildings;
+      the side's **battle bunkers**, **tank bunkers** and **bio
+      reactors**; **tech capture** and a **tech guard** for what was
+      taken; **patrols** between refineries and power plants; and the
+      **base watch**.
+    - Navy, once a shipyard stands: lines, **sub hunters** and
+      **bombardment** groups; the engine keeps them off maps without
+      water.
+    - Superweapon assaults: three **Chronosphere assaults** (next to the
+      enemy's factories, power or defences), an **Iron Curtain charge**
+      for a side with a team-cast curtain (vehicles under the curtain
+      drive through the defences together), and a **boost assault** for
+      each team-cast buff, built only from the units its warhead
+      reaches (Overcharge: Tesla units; Irradiate: Soviet armour;
+      Regen and Wonder Drugs, Kinetic Barrier: infantry; Rage,
+      Illusion, Chronoboost, Glacial Screen) and casting it before the
+      push.
+    - Turnover: attack and counter squads recruit idle units of their
+      types anywhere (`Recruiter`), so survivors refill them before the
+      factories do; members of an ended base-defence team rejoin the
+      pool (Phobos `SetRecruitableOnLiberate`); the cap on teams at once
+      rises from MO's 100/75/50 to 150/115/80 for the larger pool;
+      agents with nothing to enter wait instead of being raised again.
     - How they fight: lines and sieges regroup, stage outside the enemy
       base (vanilla 53, under a Phobos 16001 timeout), fight there in
       Phobos Area Guard (10100), where every member picks its own
       target, then push with vanilla `0,q` on defences and structures,
       which hands the team's focus only to members without a target.
-      Phobos attack lines are kept for single-role teams (raids, air,
-      agents): they give every member the leader's target each frame,
-      so a mixed team's anti-air and medics would chase a building.
-      `LeadershipRating` ranks the slots (front line 12, artillery 10,
-      hero 9, screen 8, anti-air 6, support 4), so a tank leads and
-      picks targets instead of a dog or a hero (MO rates heroes 99).
-      Attack teams are `Aggressive`. Engineers and spies with nothing to
-      enter wait in Area Guard and look again, so the trigger is not
-      rolled again at once.
+      Phobos attack lines are kept for single-role teams (raids,
+      counters, agents): they give every member the leader's target
+      each frame, so a mixed team's anti-air and medics would chase a
+      building. `LeadershipRating` ranks the slots (front line 12,
+      artillery 10, hero 9, screen 8, anti-air 6, support 4; a unit
+      takes its highest), so a tank leads and picks targets instead of
+      a dog or a hero (MO rates heroes 99). Attack teams are
+      `Aggressive`.
     - Not used, broken in Phobos v0.5-alpha2: 12000 (never waits),
       10102 (never regroups), 18000, the "random" list attacks, and
       10104's charge test.
@@ -533,6 +583,19 @@ profile may stop at any layer but never skips one (a contract test checks
       position, fell first in every four-AI game; in a Russia-Latin game
       Drakuv fired 11 times, Irradiate 5, Overcharge 5 and the Iron
       Curtain 3. Nuclear Path was not seen.
+    - The expanded set played (four Mental AIs, nine minutes): 1,234
+      teams formed, from every family: 75 direct lines, 63 flanks, 59
+      hunts, 65 feints, 49 blitzes, 47 power and 38 economy raids, 81
+      garrisons, 34 bio-reactor and 18 battle-bunker teams, spies on
+      every class of building (108), 35 engineer drops, counters against
+      named enemy units (Mastodon, Libra, Tanya, Tesla tanks, Gharials,
+      enemy jets), superweapon snipes, sky guards, boost assaults
+      (Regen, Illusion, Overcharge, Rage, Chronoboost, Irradiate), six
+      Iron Curtain charges and four of each Chronosphere assault; the
+      casts fired (Overcharge 11, Drakuv 10, Rage 6, Iron Curtain 5).
+      Airfield-bound strike craft are lost and raised again often
+      (about 40 teams of two per tier in nine minutes) but no longer
+      abandoned. Still not played: the navy (no water on the map).
   - Rules in the first wave:
     - **aura**: 19 field emitters (Ultra Dome, Lightning Rod, Repair
       Crane, Iron Guard, Disruptor, Chimera Core, Haze Core, Magnetic
@@ -850,12 +913,17 @@ code before `-G`, as MO's own Last Bastion twins do (`FOETT135LB-G`). The
 codes are two letters from MO's country labels: US EU PA (USA, Euro,
 Pacific), RU LA CH (Russia, Latin, China), PC SC HQ (PsiCorps, Scorpion,
 HQ), HA CO LB (Haihead, Coronia, Last Bastion). The generated Mental AI
-numbers its IDs by family and tier (`MNTTF102RU-G` is Russia's tier-2
-line, with team `MNTTT102RU-G` and trigger `MNTTR102RU-G`; 1xx line,
-2xx siege, 3xx raid, 4xx air, 5xx base watch, 6xx engineers, 7xx spy,
-800 MCV, 803 Chronosphere assault, 9xx navy), and its scripts by family
-(`MNTSC100-G`, 810 for the Chronosphere assault), with the country code
-when the script casts that country's superweapons (`MNTSC100RU-G`). Their names take the
+numbers its IDs with four digits, family then tier or variant
+(`MNTTF0102RU-G` is Russia's tier-2 line, with team `MNTTT0102RU-G` and
+trigger `MNTTR0102RU-G`): 01-03 lines (direct, flank, hunt), 04 line
+with air, 05-06 siege, 07-11 blitz, feint, economy, power and stealth
+raids, 13 air strike, 15 base watch, 16 patrol, 17 tech guard, 18 sky
+guard, 19 superweapon snipe, 20-25 capture, garrison, bunkers, bio
+reactor, hijack, 26 spies, 27 engineer drops, 30-32 navy, 35
+Chronosphere, 36 Iron Curtain, 37 boost assaults, 50-59 counter
+triggers, 60-89 counter squads, 99 MCV. Scripts are numbered by kind
+(`MNTSC1000-G`), with the country code when they cast that country's
+superweapons (`MNTSC1000RU-G`). Their names take the
 country's label where MO's name has the side's ("Last Bastion - Condor
 Hunt" for "Foehn - Buzzard Hunt"), and a task force is named by its
 members ("4 Condor"). A house list naming the owner and its allies is `team`.
