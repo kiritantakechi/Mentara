@@ -42,7 +42,10 @@ LAYERS = (BASE_LAYER, PHOBOS_LAYER, ENHANCE_LAYER)
 _ENGINE_SUFFIXES = frozenset({".dll", ".exe", ".edb", ".pdb"})
 _HIDE_VERSION_RE = re.compile(r"-HideVersionWarning=([^\s\"'`,\]]+)")
 _EXPANSION_MIX_RE = re.compile(r"expandmo\d{2}\.mix")
-_DEFINE_HOOK_RE = re.compile(r"DEFINE_HOOK\(\s*(0x[0-9A-Fa-f]+),\s*(\w+),\s*(\d+)\)")
+# `syringe.hook(address, "Name", size, body)` in a hook DLL's sources.
+_SYRINGE_HOOK_RE = re.compile(
+    r'syringe\.hook\(\s*(0x[0-9A-Fa-f]+),\s*"(\w+)",\s*(\d+),'
+)
 _HOOK_SECTION = ".syhks00"
 # Syringe's hookdecl is 16-byte aligned: address, size, name, padding.
 _HOOK_STRIDE = 16
@@ -405,7 +408,7 @@ def _shipped_asset_sources() -> tuple[AssetSource, ...]:
 def test_generated_layer_files_match_their_sources() -> None:
     # `just assets` builds these. A source edited without a rebuild, or
     # a hand-edited output, fails here. Hook DLL bytes depend on the
-    # clang version, so DLLs are checked against their declarations.
+    # Zig version, so DLLs are checked against their declarations.
     sources = [s for s in _shipped_asset_sources() if s.kind is not AssetKind.HOOK_DLL]
 
     assert sources
@@ -415,16 +418,16 @@ def test_generated_layer_files_match_their_sources() -> None:
 
 def test_hook_dlls_declare_exactly_the_hooks_in_their_sources() -> None:
     # DLLs are committed so players need no compiler; each Syringe hook
-    # table must match the DEFINE_HOOKs in the C sources it came from.
+    # table must match the `syringe.hook` calls in its Zig sources.
     dlls = [s for s in _shipped_asset_sources() if s.kind is AssetKind.HOOK_DLL]
 
     assert dlls
     for source in dlls:
         declared = {
             (int(address, 16), name, int(size))
-            for c_file in sorted(source.path.glob("*.c"))
-            for address, name, size in _DEFINE_HOOK_RE.findall(
-                c_file.read_text(encoding="utf-8")
+            for zig_file in sorted(source.path.glob("*.zig"))
+            for address, name, size in _SYRINGE_HOOK_RE.findall(
+                zig_file.read_text(encoding="utf-8")
             )
         }
         hooks, exports = _syringe_hooks(source.output.read_bytes())

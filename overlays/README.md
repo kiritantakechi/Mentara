@@ -88,9 +88,11 @@ profile may stop at any layer but never skips one (a contract test checks
     AI's Cryocopter lacked the player version's `Chronoshift.Crushable=no`,
     so units chronoshifted onto it crushed it; it now resists like the
     player's.
-  - **`MentaraFixes.dll`** (Syringe hook DLL built from
+  - **`MentaraFixes.dll`** (Syringe hook DLL written in Zig, built from
     `assets/base/MentaraFixes.dll/` by `just assets`; Syringe injects it
-    next to Ares): campaigns crashed under
+    next to Ares. Its safety checks stay on and trap, so a hook that finds
+    the game in a state it cannot handle stops there and the crash log
+    names it): campaigns crashed under
     Wine with stock MO (exit `C0000005` at `0x00529A14`). The CnCNet spawner
     routes every `-SPAWN` game through the scenario reader that loads the
     multiplayer `[Header]` without resetting it first; campaign maps have no
@@ -100,7 +102,7 @@ profile may stop at any layer but never skips one (a contract test checks
     `0x689EB0`, exactly like Phobos's `ScenarioClass_ReadMap_SkipHeaderInCampaign`,
     so the Ares-only and Phobos stacks behave alike and loading both is
     harmless (Ares 3.0p1 alone does not fix it). Syringe walks hook tables
-    with a 16-byte stride, so its `syringe.h` aligns each entry to 16.
+    with a 16-byte stride, so its `syringe.zig` pads each entry to 16.
     The same DLL fixes LAN and online games with a spectator, which crashed
     on load (`0x005D6C21`): the CnCNet client writes 90 as a spectator's
     spawn location, and the first pass that places preset start positions

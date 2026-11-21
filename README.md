@@ -99,7 +99,7 @@ Mentara/
 | `<名>.csf.toml` | `<名>.csf` | `[strings]` 表：标签 = "文本" |
 | `<名>.pal.toml` | `<名>.pal` | `colours = ["#RRGGBB", ...]`，按调色板索引排列 |
 | `<名>.shp.toml` | `<名>.shp` | `sheet`（同目录索引色 PNG）按 `frame = [宽, 高]` 从左到右、从上到下切帧 |
-| `<名>.dll/` | `<名>.dll` | Syringe 钩子 DLL 的 C 源码，用 clang + lld 构建（无 C 运行库） |
+| `<名>.dll/` | `<名>.dll` | Syringe 钩子 DLL 的 Zig 源码（以 `root.zig` 为根），用 Zig 0.17 构建为 32 位 Windows DLL（无 C 运行库，保留安全检查） |
 
 其余文件（如 PNG 帧图）是这些源文件的输入。生成文件随仓库提交，玩家无需工具链；
 契约测试会在源文件改动而未重新构建时失败。

@@ -21,15 +21,26 @@ from mentara.png import IndexedImage, encode_indexed_png
 from mentara.shp import decode_shp
 
 HOOK_SOURCE = """\
-typedef unsigned long DWORD;
-typedef struct REGISTERS { DWORD origin, flags, regs[8]; } REGISTERS;
-typedef struct __declspec(align(16)) HookDecl {
-    unsigned int address, size; const char *name;
-} HookDecl;
-#pragma section(".syhks00", read, write)
-__declspec(dllexport) DWORD __cdecl Probe(REGISTERS *R);
-__declspec(allocate(".syhks00")) HookDecl hook_decl = {0x401000, 5, "Probe"};
-__declspec(dllexport) DWORD __cdecl Probe(REGISTERS *R) { (void)R; return 0; }
+const Entry = extern struct {
+    address: u32,
+    size: u32,
+    name: [*:0]const u8,
+    padding: u32 = 0,
+};
+fn probe(registers: *anyopaque) callconv(.c) u32 {
+    _ = registers;
+    return 0;
+}
+const entry: Entry align(16) = .{
+    .address = 0x401000,
+    .size = 5,
+    .name = "Probe",
+};
+comptime {
+    @export(&probe, .{ .name = "Probe" });
+    @export(&entry, .{ .name = "probe_entry", .section = ".syhks00" });
+}
+pub const panic = @import("std").debug.no_panic;
 """
 
 
@@ -101,11 +112,11 @@ def test_invalid_sources_name_the_file(tmp_path: Path) -> None:
             compile_asset(source)
 
 
-@pytest.mark.skipif(shutil.which("clang") is None, reason="needs clang and lld")
-def test_hook_dll_directories_compile_with_clang(tmp_path: Path) -> None:
+@pytest.mark.skipif(shutil.which("zig") is None, reason="needs zig")
+def test_hook_dll_directories_compile_with_zig(tmp_path: Path) -> None:
     source_dir = tmp_path / "assets" / "layer" / "Probe.dll"
     source_dir.mkdir(parents=True)
-    (source_dir / "probe.c").write_text(HOOK_SOURCE, encoding="utf-8")
+    (source_dir / "root.zig").write_text(HOOK_SOURCE, encoding="utf-8")
 
     (source,) = find_asset_sources(tmp_path / "assets", tmp_path / "out")
     image = compile_asset(source)

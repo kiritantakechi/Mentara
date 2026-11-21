@@ -8,8 +8,9 @@ file named by dropping its source suffix:
 - `<name>.shp.toml` -> `<name>.shp`: `sheet`, an indexed PNG beside it,
   cut into `frame = [width, height]` cells left to right, top to bottom
   (optionally only the first `count`).
-- `<name>.dll/` -> `<name>.dll`: C sources of a Syringe hook DLL, built
-  with clang and lld for 32-bit Windows without a C runtime.
+- `<name>.dll/` -> `<name>.dll`: Zig sources of a Syringe hook DLL,
+  rooted at `root.zig`, built with Zig for 32-bit Windows without a C
+  runtime.
 
 Other files in the source tree are inputs of these, such as sheets.
 """
@@ -60,19 +61,21 @@ _TOML_SUFFIX: Final[str] = ".toml"
 _SOURCE_FORMAT: Final[str] = "TOML source"
 _SHEET_FORMAT: Final[str] = "shape sheet"
 _DLL_FORMAT: Final[str] = "hook DLL"
-_CLANG: Final[str] = "clang"
+_ZIG: Final[str] = "zig"
+_HOOK_DLL_ROOT: Final[str] = "root.zig"
+# The game is a 32-bit MSVC program. Safety checks stay on: the DLL's
+# own panic handler traps, so a failed check stops the game in the hook
+# that found it. Zig's output is reproducible: a rebuild changes no
+# bytes.
 _HOOK_DLL_FLAGS: Final[tuple[str, ...]] = (
-    "--target=i686-pc-windows-msvc",
-    "-std=c17",
-    "-O2",
-    "-Wall",
-    "-Wextra",
-    "-Werror",
-    "-fno-stack-protector",
-    "-shared",
-    "-nostdlib",
-    "-fuse-ld=lld",
-    "-Wl,/noentry,/noimplib,/Brepro",
+    "build-lib",
+    "-dynamic",
+    "-target",
+    "x86-windows-msvc",
+    "-O",
+    "ReleaseSafe",
+    "-fsingle-threaded",
+    "-fstrip",
 )
 
 
@@ -236,23 +239,28 @@ def _compile_shape(path: Path) -> bytes:
 
 
 def _compile_hook_dll(directory: Path, output_name: str) -> bytes:
-    clang = shutil.which(_CLANG)
-    if clang is None:
+    zig = shutil.which(_ZIG)
+    if zig is None:
         purpose = "build Syringe hook DLLs"
-        raise AssetError.missing_tool(_CLANG, purpose)
-    sources = sorted(directory.glob("*.c"))
-    if not sources:
-        detail = "no .c sources"
+        raise AssetError.missing_tool(_ZIG, purpose)
+    root = directory / _HOOK_DLL_ROOT
+    if not root.is_file():
+        detail = f"no {_HOOK_DLL_ROOT}"
         raise AssetError.invalid_format(_DLL_FORMAT, detail)
     with tempfile.TemporaryDirectory() as scratch:
         # The export table embeds the output name, so build under it.
         target = Path(scratch) / output_name
-        command = [clang, *_HOOK_DLL_FLAGS, "-o", str(target), *map(str, sources)]
-        result = subprocess.run(  # noqa: S603 - clang from shutil.which, fixed flags
+        name = Path(output_name).stem
+        emit = f"-femit-bin={target}"
+        source = str(root.resolve())
+        command = [zig, *_HOOK_DLL_FLAGS, "--name", name, emit, source]
+        # Run from the scratch directory, so no cache lands in the tree.
+        result = subprocess.run(  # noqa: S603 - zig from shutil.which, fixed flags
             command,
             capture_output=True,
             text=True,
             check=False,
+            cwd=scratch,
         )
         if result.returncode:
             raise AssetError.invalid_format(_DLL_FORMAT, result.stderr.strip())
