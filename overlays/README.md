@@ -459,6 +459,20 @@ op = "append"           # also prepend
 content = "; end"
 ```
 
+### Names of added objects
+
+Objects a layer adds to the game's INI files are named
+`<Layer><Subject><Role>`: the layer (`Phobos`, `Enhance`), the unit or
+system they serve, and what they are. Where MO marks a kind by suffix, the
+suffix stays: warheads end in `WH` and elite weapons in `E`. For example
+`PhobosRing24` (selection ring of radius 24), `PhobosUnitHealthTeam`
+(health readout shown to the team), `EnhanceOxidizerMark` (the Oxidizer's
+mark effect), `EnhanceCyclopsCannonClose` / `EnhanceCyclopsCannonCloseE`
+(MO's `CyclopsCannon` at close range) and `EnhanceNanofiberHealWH`. Art IDs
+of new shapes are the shape's file stem in upper case (`PHRANKV` draws
+`phrankv.shp`), and new AI IDs follow MO's form with the prefix `MNT`
+(`MNTTF01-G`). A house list naming the owner and its allies is `team`.
+
 ## How Layering Works
 
 Configure ordered layers in `mentara.toml`:
