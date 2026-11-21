@@ -45,12 +45,11 @@ from mentara._mix_crypto import (
     xor_key1024,
 )
 from mentara.errors import OverlayError
-from mentara.patcher import PatchSpec, apply_patch_chain
+from mentara.patcher import PatchSpec, apply_patches
 
 __all__ = [
     "LMD_FILENAME",
     "LMD_ID",
-    "MIX_PATCH_SUFFIX",
     "MIXArchiveOp",
     "MIXContext",
     "MIXEntry",
@@ -76,7 +75,6 @@ __all__ = [
 LMD_FILENAME: Final[str] = "local mix database.dat"
 # Precomputed `mix_id(LMD_FILENAME)` to avoid import-time computation.
 LMD_ID: Final[int] = 0x366E051F
-MIX_PATCH_SUFFIX: Final[str] = ".patch.mix"
 _MIX_SUFFIX: Final[str] = ".mix"
 
 _XCC_ID: Final[bytes] = b"XCC by Olaf van der Spek\x1a\x04\x17\x27\x10\x19\x80\x00"
@@ -1275,7 +1273,7 @@ def _apply_leaf_member_ops(
         base_text = (
             current.decode("utf-8", errors="replace") if current is not None else ""
         )
-        current = apply_patch_chain(base_text, pending_patches).encode("utf-8")
+        current = apply_patches(base_text, pending_patches).encode("utf-8")
         pending_patches.clear()
 
     for op in mix_ops:
@@ -1500,7 +1498,7 @@ def _apply_patch_batch(
     base_text = (
         raw_base.decode("utf-8", errors="replace") if raw_base is not None else ""
     )
-    merged = apply_patch_chain(base_text, patches)
+    merged = apply_patches(base_text, patches)
     state.memory_blobs[entry_id] = merged.encode("utf-8")
     state.archive_refs.pop(entry_id, None)
 

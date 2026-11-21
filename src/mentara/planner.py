@@ -10,8 +10,17 @@ lazy from collections.abc import Sequence
 
 from mentara.config import MIXDecryptMode
 from mentara.errors import OverlayError
+from mentara.layout import (
+    ArchivePlacement,
+    FilePlacement,
+    PatchFormat,
+    PatchPlacement,
+    is_archive_name,
+    is_structural,
+    place,
+    split_archive_path,
+)
 from mentara.mix import (
-    MIX_PATCH_SUFFIX,
     MIXArchiveOp,
     MIXContext,
     MIXFileOp,
@@ -23,11 +32,7 @@ from mentara.mix import (
     probe_mix_file,
     render_mix_member_text,
 )
-from mentara.patcher import (
-    PatchSpec,
-    apply_patch_chain,
-    parse_patch_target,
-)
+from mentara.patcher import PatchSpec, apply_patches
 
 __all__ = [
     "WHITEOUT_PREFIX",
@@ -46,7 +51,6 @@ __all__ = [
 ]
 
 WHITEOUT_PREFIX: Final[str] = ".wh."
-_MIX_SUFFIX: Final[str] = ".mix"
 
 
 class EntryOrigin(StrEnum):
@@ -182,10 +186,10 @@ def build_overlay_plan(
     """Compute the merged file map across ordered bottom-to-top sources.
 
     Later entries in `sources` override earlier entries at the same
-    relative path, while `.patch.*` files, `.patch.mix` archives, and
-    `<archive>.mix/` container directories compose incrementally on top
-    of lower-layer files. Encrypted `.mix` archives are automatically
-    scheduled for decryption according to `mix_decrypt`.
+    relative path, while patches and MIX container members (see
+    `mentara.layout`) compose on top of lower-layer files. Encrypted
+    `.mix` archives are scheduled for decryption according to
+    `mix_decrypt`.
 
     Args:
         sources: Ordered layer sources from lowest to highest priority.
@@ -249,8 +253,13 @@ def build_overlay_plan(
         accumulator.winning[key]
         for key in sorted(accumulator.winning, key=lambda path: path.as_posix())
     )
+    # A consumed layer path stays visible only where the plan puts an
+    # entry at that very path (a MIX container of the same case).
     sorted_hidden = tuple(
-        sorted(accumulator.hidden_paths, key=lambda path: path.as_posix())
+        sorted(
+            (path for path in accumulator.claims if path not in accumulator.winning),
+            key=lambda path: path.as_posix(),
+        )
     )
     return OverlayPlan(
         directories=sorted_dirs,
@@ -289,9 +298,7 @@ def render_entry_text(entry: FileEntry) -> str:
                 str(exc),
             ) from exc
 
-    if not entry.patches:
-        return base_text
-    return apply_patch_chain(base_text, entry.patches)
+    return apply_patches(base_text, entry.patches)
 
 
 def render_virtual_text(plan: OverlayPlan, target: Path) -> str:
@@ -311,16 +318,16 @@ def render_virtual_text(plan: OverlayPlan, target: Path) -> str:
     Raises:
         OverlayError: If the target file or MIX entry does not exist.
     """
-    mix_split = _split_mix_container_path(target)
-    if mix_split is not None:
-        mix_relative, inner_relative = mix_split
-        mix_entry = plan.lookup_case_insensitive(mix_relative)
+    archive_split = split_archive_path(target)
+    if archive_split is not None:
+        archive, member = archive_split
+        mix_entry = plan.lookup_case_insensitive(archive)
         if mix_entry is None:
             raise OverlayError.missing_virtual_file(target)
         return render_mix_member_text(
             mix_entry.source_path,
             mix_ops=mix_entry.mix_ops,
-            member_path=inner_relative.parts,
+            member_path=member,
             context=plan.mix_context,
         )
 
@@ -420,7 +427,7 @@ class _PlanAccumulator:
     winning: dict[Path, FileEntry] = field(default_factory=dict)
     folded_keys: dict[str, Path] = field(default_factory=dict)
     folded_variants: dict[str, dict[Path, str]] = field(default_factory=dict)
-    hidden_paths: set[Path] = field(default_factory=set)
+    claims: set[Path] = field(default_factory=set)
 
     def record_variant(self, relative_path: Path, label: str) -> None:
         folded = relative_path.as_posix().casefold()
@@ -474,7 +481,7 @@ def _validate_mix_entry(
                     role = "MIX overlay file"
                     raise OverlayError.missing_file(role, op.source_path)
                 if (
-                    op.target_path[-1].casefold().endswith(_MIX_SUFFIX)
+                    is_archive_name(op.target_path[-1])
                     and probe_mix_file(op.source_path).needs_decryption
                 ):
                     _ = open_mix_archive(op.source_path, context=context)
@@ -492,238 +499,90 @@ def _validate_mix_entry(
                 assert_never(op)
 
 
-def _is_mix_segment(segment: str) -> bool:
-    return segment.casefold().endswith(_MIX_SUFFIX) and len(segment) > len(_MIX_SUFFIX)
-
-
-def _split_mix_container_path(relative_path: Path) -> tuple[Path, Path] | None:
-    parts = relative_path.parts
-    for index, segment in enumerate(parts[:-1]):
-        if _is_mix_segment(segment):
-            mix_relative = Path(*parts[: index + 1])
-            inner_relative = Path(*parts[index + 1 :])
-            return mix_relative, inner_relative
-    return None
-
-
-def _parse_mix_patch_archive(relative_path: Path) -> Path | None:
-    name = relative_path.name
-    if name.casefold().endswith(MIX_PATCH_SUFFIX) and len(name) > len(MIX_PATCH_SUFFIX):
-        stem = name[: -len(MIX_PATCH_SUFFIX)]
-        target_name = f"{stem}{_MIX_SUFFIX}"
-        parent = relative_path.parent
-        return Path(target_name) if parent == Path() else parent / target_name
-    return None
-
-
 def _scan_source(
     *,
     source: LayerSource,
     accumulator: _PlanAccumulator,
 ) -> None:
     excluded = frozenset(source.exclude)
+    is_layer = source.origin is EntryOrigin.LAYER
     for current_dir, dirnames, filenames in source.root.walk():
         relative_dir = current_dir.relative_to(source.root)
-        is_top_level = relative_dir == Path()
-
+        top_level = relative_dir == Path()
         dirnames[:] = sorted(
-            name for name in dirnames if not (is_top_level and name in excluded)
+            name for name in dirnames if not (top_level and name in excluded)
         )
-        for dirname in dirnames:
-            candidate_dir = Path(dirname) if is_top_level else relative_dir / dirname
-            if source.origin is EntryOrigin.LAYER and (
-                _is_or_inside_mix_dir(candidate_dir)
-                or _is_or_inside_patch_dir(candidate_dir)
-            ):
-                continue
-            accumulator.directories.add(candidate_dir)
-
+        accumulator.directories.update(
+            relative_dir / name
+            for name in dirnames
+            if not (is_layer and is_structural(relative_dir / name))
+        )
         for filename in sorted(filenames):
-            if is_top_level and filename in excluded:
-                continue
-            if source.origin is EntryOrigin.STATE and filename.startswith(
-                WHITEOUT_PREFIX
+            full_path = current_dir / filename
+            if (
+                (top_level and filename in excluded)
+                or (not is_layer and filename.startswith(WHITEOUT_PREFIX))
+                or not (full_path.is_file() or full_path.is_symlink())
             ):
                 continue
-
-            relative_file = Path(filename) if is_top_level else relative_dir / filename
-            full_path = current_dir / filename
-            if not (full_path.is_file() or full_path.is_symlink()):
-                continue
-
-            _dispatch_scanned_file(
-                relative_file=relative_file,
-                full_path=full_path,
-                source=source,
-                accumulator=accumulator,
-            )
+            relative_file = relative_dir / filename
+            if is_layer:
+                _record_layer_file(relative_file, full_path, source, accumulator)
+            else:
+                _record_full_entry(
+                    relative_file=relative_file,
+                    full_path=full_path,
+                    source=source,
+                    accumulator=accumulator,
+                )
 
 
-def _is_or_inside_mix_dir(relative_dir: Path) -> bool:
-    return any(_is_mix_segment(part) for part in relative_dir.parts)
-
-
-def _is_or_inside_patch_dir(relative_dir: Path) -> bool:
-    return any(
-        parse_patch_target(Path(part)) is not None for part in relative_dir.parts
-    )
-
-
-def _check_patch_fragment(relative_file: Path, full_path: Path) -> None:
-    # A patch directory is consumed whole: everything in it must be a
-    # fragment, directly inside it.
-    holders = [
-        Path(*relative_file.parts[: index + 1])
-        for index, part in enumerate(relative_file.parts[:-1])
-        if parse_patch_target(Path(part)) is not None
-    ]
-    if not holders:
-        return
-    if holders == [relative_file.parent] and parse_patch_target(relative_file):
-        return
-    detail = f"patch directory {holders[0].name} holds only *{holders[0].suffix} files"
-    raise OverlayError.invalid_patch(full_path, detail)
-
-
-def _dispatch_scanned_file(
-    *,
+def _record_layer_file(
     relative_file: Path,
     full_path: Path,
     source: LayerSource,
     accumulator: _PlanAccumulator,
 ) -> None:
-    if source.origin is EntryOrigin.LAYER:
-        _check_patch_fragment(relative_file, full_path)
-        mix_container = _split_mix_container_path(relative_file)
-        if mix_container is not None:
-            mix_relative, inner_relative = mix_container
-            _record_mix_container_member(
-                mix_relative=mix_relative,
-                inner_relative=inner_relative,
+    label = source.label
+    match place(relative_file):
+        case FilePlacement(path=path):
+            _record_full_entry(
+                relative_file=path,
                 full_path=full_path,
-                layer_label=source.label,
+                source=source,
                 accumulator=accumulator,
             )
-            return
-
-        mix_patch_target = _parse_mix_patch_archive(relative_file)
-        if mix_patch_target is not None:
-            accumulator.hidden_paths.add(relative_file)
-            _record_mix_archive_patch(
-                mix_relative=mix_patch_target,
-                source_path=full_path,
-                layer_label=source.label,
+        case PatchPlacement(path=path, patch=patch_format, claims=claims):
+            accumulator.claims.add(claims)
+            spec = PatchSpec(patch_format, full_path, label)
+            _record_patch_entry(path, spec, accumulator)
+        case ArchivePlacement(
+            archive=archive, member=member, patch=patch, claims=claims
+        ):
+            accumulator.claims.add(claims)
+            _append_mix_op(
+                canonical_mix=accumulator.resolve_canonical(archive),
+                new_op=_mix_op(member, patch, full_path, label),
+                layer_label=label,
                 accumulator=accumulator,
             )
-            return
-
-        patch_target = parse_patch_target(relative_file)
-        if patch_target is not None:
-            target_relative, patch_kind = patch_target
-            # A fragment hides its whole patch directory.
-            accumulator.hidden_paths.add(
-                relative_file.parent
-                if _is_or_inside_patch_dir(relative_file.parent)
-                else relative_file
-            )
-            _record_patch_entry(
-                target_relative=target_relative,
-                spec=PatchSpec(
-                    kind=patch_kind,
-                    source_path=full_path,
-                    layer_label=source.label,
-                ),
-                accumulator=accumulator,
-            )
-            return
-
-    _record_full_entry(
-        relative_file=relative_file,
-        full_path=full_path,
-        source=source,
-        accumulator=accumulator,
-    )
 
 
-def _record_mix_container_member(
-    *,
-    mix_relative: Path,
-    inner_relative: Path,
+def _mix_op(
+    member: tuple[str, ...],
+    patch: PatchFormat | None,
     full_path: Path,
-    layer_label: str,
-    accumulator: _PlanAccumulator,
-) -> None:
-    inner_text_patch = parse_patch_target(inner_relative)
-    nested_parents = (
-        inner_text_patch[0].parent.parts
-        if inner_text_patch is not None
-        else inner_relative.parts[:-1]
-    )
-    for parent_segment in nested_parents:
-        if not _is_mix_segment(parent_segment):
-            detail = (
-                f"invalid non-.mix subdirectory {parent_segment!r} inside "
-                f"MIX container {mix_relative.as_posix()}"
-            )
-            raise OverlayError.invalid_mix(full_path, detail)
-
-    canonical_mix = accumulator.resolve_canonical(mix_relative)
-    if canonical_mix != mix_relative:
-        accumulator.hidden_paths.add(mix_relative)
-
-    leaf_name = inner_relative.parts[-1]
-    nested_mix_patch = _parse_mix_patch_archive(Path(leaf_name))
-
-    if nested_mix_patch is not None:
-        new_op: MIXOp = MIXArchiveOp(
-            target_path=(*nested_parents, nested_mix_patch.name),
-            source_path=full_path,
-            layer_label=layer_label,
-        )
-    elif inner_text_patch is not None:
-        inner_target, patch_kind = inner_text_patch
-        new_op = MIXPatchOp(
-            target_path=inner_target.parts,
-            patch=PatchSpec(
-                kind=patch_kind,
-                source_path=full_path,
-                layer_label=layer_label,
-            ),
-        )
-    else:
-        new_op = MIXFileOp(
-            target_path=(*nested_parents, leaf_name),
-            source_path=full_path,
-            layer_label=layer_label,
-        )
-
-    _append_mix_op(
-        canonical_mix=canonical_mix,
-        new_op=new_op,
-        layer_label=layer_label,
-        accumulator=accumulator,
-    )
-
-
-def _record_mix_archive_patch(
-    *,
-    mix_relative: Path,
-    source_path: Path,
-    layer_label: str,
-    accumulator: _PlanAccumulator,
-) -> None:
-    canonical_mix = accumulator.resolve_canonical(mix_relative)
-    new_op = MIXArchiveOp(
-        target_path=(),
-        source_path=source_path,
-        layer_label=layer_label,
-    )
-    _append_mix_op(
-        canonical_mix=canonical_mix,
-        new_op=new_op,
-        layer_label=layer_label,
-        accumulator=accumulator,
-    )
+    label: str,
+) -> MIXOp:
+    match patch:
+        case None:
+            return MIXFileOp(member, full_path, label)
+        case PatchFormat.MIX:
+            return MIXArchiveOp(member, full_path, label)
+        case PatchFormat.INI | PatchFormat.TOML:
+            return MIXPatchOp(member, PatchSpec(patch, full_path, label))
+        case _:
+            assert_never(patch)
 
 
 def _append_mix_op(
@@ -750,7 +609,6 @@ def _append_mix_op(
 
 
 def _record_patch_entry(
-    *,
     target_relative: Path,
     spec: PatchSpec,
     accumulator: _PlanAccumulator,
@@ -777,7 +635,7 @@ def _should_auto_decrypt_mix(
     origin: EntryOrigin,
     mix_decrypt: MIXDecryptMode,
 ) -> bool:
-    if not _is_mix_segment(relative_file.name):
+    if not is_archive_name(relative_file.name):
         return False
     match mix_decrypt:
         case MIXDecryptMode.PATCHED:

@@ -513,7 +513,7 @@ def _cmd_inspect(
                     "shadowed_from": list(entry.shadowed_from),
                     "patches": [
                         {
-                            "kind": spec.kind.value,
+                            "format": spec.format.value,
                             "layer": spec.layer_label,
                             "source": spec.source_path.name,
                         }
@@ -606,7 +606,7 @@ def _mix_op_to_dict(op: MIXOp) -> dict[str, str]:
             }
         case MIXPatchOp():
             return {
-                "kind": f"patch:{op.patch.kind.value}",
+                "kind": f"patch:{op.patch.format.value}",
                 "target": target,
                 "layer": op.patch.layer_label,
                 "source": op.patch.source_path.name,

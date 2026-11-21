@@ -1,68 +1,62 @@
-"""Tests for `.patch.ini` and `.patch.toml` text-level patching."""
+"""Tests for INI and TOML text patches."""
 
-lazy from pathlib import Path
+from pathlib import Path
 
 import pytest
 
 from mentara.errors import OverlayError
+from mentara.layout import PatchFormat
 from mentara.patcher import (
-    InsertAfter,
-    InsertBefore,
-    PatchKind,
+    INIAppend,
+    INIDeleteSection,
+    INISet,
+    INIUnset,
+    INIUpdateSection,
     PatchSpec,
-    apply_ini_patch,
-    apply_patch_chain,
+    TextAppend,
+    TextDelete,
+    TextInsertAfter,
+    TextInsertBefore,
+    TextPrepend,
+    TextReplace,
+    apply_patches,
     parse_ini_patch,
-    parse_patch_target,
     parse_toml_patch,
 )
 
+SOURCE = Path("test.patch.ini")
 
-def test_parse_patch_target_recognizes_ini_family_and_toml_suffixes() -> None:
-    assert parse_patch_target(Path("RA2MO.ini")) is None
-    assert parse_patch_target(Path("Resources/ClientDefinitions.patch.ini")) == (
-        Path("Resources/ClientDefinitions.ini"),
-        PatchKind.INI,
+
+def test_ini_patch_parses_one_spelling_per_operation() -> None:
+    patch = parse_ini_patch(
+        "; comment\nRoot=1\n[A]\nKey = Value\n-Old\n+=Item\n[-B]\n",
+        source_path=SOURCE,
     )
-    assert parse_patch_target(Path("MapsMO/Challenge/c_aberration.patch.map")) == (
-        Path("MapsMO/Challenge/c_aberration.map"),
-        PatchKind.INI,
-    )
-    assert parse_patch_target(Path("Maps/Custom/duel.patch.yrm")) == (
-        Path("Maps/Custom/duel.yrm"),
-        PatchKind.INI,
-    )
-    assert parse_patch_target(Path("Maps/Custom/classic.patch.mpr")) == (
-        Path("Maps/Custom/classic.mpr"),
-        PatchKind.INI,
-    )
-    assert parse_patch_target(Path("Resources/aqrit.patch.cfg")) == (
-        Path("Resources/aqrit.cfg"),
-        PatchKind.INI,
-    )
-    assert parse_patch_target(Path("Ares.dll.patch.inj")) == (
-        Path("Ares.dll.inj"),
-        PatchKind.INI,
-    )
-    assert parse_patch_target(Path("MentalOmegaClient.exe.config.patch.toml")) == (
-        Path("MentalOmegaClient.exe.config"),
-        PatchKind.TOML,
+
+    assert patch.operations == (
+        INIUpdateSection(None, (INISet("Root", "1"),)),
+        INIUpdateSection(
+            "A", (INISet("Key", "Value"), INIUnset("Old"), INIAppend("Item"))
+        ),
+        INIDeleteSection("B"),
     )
 
 
-def test_parse_patch_target_maps_fragments_to_their_directory_target() -> None:
-    assert parse_patch_target(Path("mix/rules.patch.ini/allied.ini")) == (
-        Path("mix/rules.ini"),
-        PatchKind.INI,
-    )
-    assert parse_patch_target(Path("a.cfg.patch.toml/b.TOML")) == (
-        Path("a.cfg"),
-        PatchKind.TOML,
-    )
-    # Only files ending in the patch's own extension are fragments.
-    assert parse_patch_target(Path("rules.patch.ini/notes.md")) is None
-    assert parse_patch_target(Path("rules.patch.ini/.ini")) is None
-    assert parse_patch_target(Path("rules.patch.ini/a.patch.toml")) is None
+@pytest.mark.parametrize(
+    "line",
+    ["NoEquals", "!Old", "+Key=Value", "-Key=1", "=Value", "# comment"],
+)
+def test_ini_patch_rejects_other_spellings(line: str) -> None:
+    with pytest.raises(
+        OverlayError, match="expected 'Key=Value', '\\+=Value' or '-Key'"
+    ):
+        parse_ini_patch(f"[A]\n{line}\n", source_path=SOURCE)
+
+
+@pytest.mark.parametrize("header", ["[]", "[-]", "[ - ]"])
+def test_ini_patch_rejects_empty_section_names(header: str) -> None:
+    with pytest.raises(OverlayError, match="empty section name"):
+        parse_ini_patch(f"{header}\n", source_path=SOURCE)
 
 
 def test_sectionless_cfg_and_inj_patches_preserve_alignment() -> None:
@@ -72,31 +66,29 @@ def test_sectionless_cfg_and_inj_patches_preserve_alignment() -> None:
         "NoVideoMemory            = 0\r\n"
         "ShowFPS                  = 0\r\n"
     )
-    cfg_patch = parse_ini_patch(
-        "!NoVideoMemory\nShowFPS = 1\nCustomOption = 2\n",
+    cfg = parse_ini_patch(
+        "-NoVideoMemory\nShowFPS = 1\nCustomOption = 2\n",
         source_path=Path("aqrit.patch.cfg"),
-    )
-    merged_cfg = apply_ini_patch(base_cfg, cfg_patch)
-    assert "NoVideoMemory" not in merged_cfg
-    assert "ShowFPS                  = 1\r\n" in merged_cfg
-    assert "CustomOption=2\r\n" in merged_cfg
+    ).apply(base_cfg)
+    assert "NoVideoMemory" not in cfg
+    assert "ShowFPS                  = 1\r\n" in cfg
+    assert "CustomOption=2\r\n" in cfg
 
     base_inj = (
         "; \\Ares.cpp\r\n"
         "52C5E0 = Ares_NoLogo, 7\r\n"
         "6AD0ED = Ares_AllowSinglePlay, 5\r\n"
     )
-    inj_patch = parse_ini_patch(
-        "!6AD0ED\n52C5E0 = Custom_NoLogo, 7\n",
+    inj = parse_ini_patch(
+        "-6AD0ED\n52C5E0 = Custom_NoLogo, 7\n",
         source_path=Path("Ares.dll.patch.inj"),
-    )
-    merged_inj = apply_ini_patch(base_inj, inj_patch)
-    assert "6AD0ED" not in merged_inj
-    assert "52C5E0 = Custom_NoLogo, 7\r\n" in merged_inj
+    ).apply(base_inj)
+    assert "6AD0ED" not in inj
+    assert "52C5E0 = Custom_NoLogo, 7\r\n" in inj
 
 
-def test_ini_patch_set_unset_append_and_delete_section() -> None:
-    base_ini = (
+def test_ini_patch_sets_deletes_appends_and_deletes_sections() -> None:
+    base = (
         "; Header comment\r\n"
         "[Settings]\r\n"
         "GameExecutableNames=gamemd.exe\r\n"
@@ -110,25 +102,23 @@ def test_ini_patch_set_unset_append_and_delete_section() -> None:
         "[Obsolete]\r\n"
         "DeadKey=1\r\n"
     )
-    patch_text = (
-        "; Incremental INI patch\n"
+    patch = parse_ini_patch(
         "[-Obsolete]\n"
         "[Settings]\n"
         "GameExecutableNames=Syringe.exe\n"
         "GameLauncherExecutableName=\n"
-        "!ForbiddenFiles\n"
+        "-ForbiddenFiles\n"
         "NewKey=yes\n"
         "[Animations]\n"
         "+=ANIM_C\n"
         "+=ANIM_D\n"
         "[BrandNew]\n"
-        "+=FIRST_ITEM\n"
+        "+=FIRST_ITEM\n",
+        source_path=SOURCE,
     )
 
-    patch = parse_ini_patch(patch_text, source_path=Path("test.patch.ini"))
-    merged = apply_ini_patch(base_ini, patch)
+    merged = patch.apply(base)
 
-    assert "\r\n" in merged
     assert "; Header comment\r\n" in merged
     assert "[Obsolete]" not in merged
     assert "DeadKey" not in merged
@@ -141,164 +131,152 @@ def test_ini_patch_set_unset_append_and_delete_section() -> None:
 
 
 def test_ini_patch_edits_every_occurrence_of_a_repeated_section() -> None:
-    base_ini = (
-        "[TaskForces]\r\n"
-        "0=TF_A\r\n"
-        "\r\n"
-        "[TF_A]\r\n"
-        "Name=4 Robots Water\r\n"
-        "0=4,ROBOW\r\n"
-        "Group=-1\r\n"
-        "\r\n"
-        "[TF_A]\r\n"
-        "Name=2 Robots\r\n"
-        "0=2,ROBO\r\n"
-        "\r\n"
-        "[TaskForces]\r\n"
-        "1=TF_B\r\n"
+    base = (
+        "[TaskForces]\r\n0=TF_A\r\n\r\n"
+        "[TF_A]\r\nName=4 Robots Water\r\n0=4,ROBOW\r\nGroup=-1\r\n\r\n"
+        "[TF_A]\r\nName=2 Robots\r\n0=2,ROBO\r\n\r\n"
+        "[TaskForces]\r\n1=TF_B\r\n"
     )
     patch = parse_ini_patch(
-        "[TF_A]\nName=Fixed\n!Group\nMax=3\n[TaskForces]\n+=TF_C\n",
+        "[TF_A]\nName=Fixed\n-Group\nMax=3\n[TaskForces]\n+=TF_C\n",
         source_path=Path("aimo.patch.ini"),
     )
 
-    assert apply_ini_patch(base_ini, patch) == (
-        "[TaskForces]\r\n"
-        "0=TF_A\r\n"
-        "\r\n"
-        "[TF_A]\r\n"
-        "Name=Fixed\r\n"
-        "0=4,ROBOW\r\n"
-        "\r\n"
-        "[TF_A]\r\n"
-        "Name=Fixed\r\n"
-        "0=2,ROBO\r\n"
-        "Max=3\r\n"
-        "\r\n"
-        "[TaskForces]\r\n"
-        "1=TF_B\r\n"
-        "2=TF_C\r\n"
+    assert patch.apply(base) == (
+        "[TaskForces]\r\n0=TF_A\r\n\r\n"
+        "[TF_A]\r\nName=Fixed\r\n0=4,ROBOW\r\n\r\n"
+        "[TF_A]\r\nName=Fixed\r\n0=2,ROBO\r\nMax=3\r\n\r\n"
+        "[TaskForces]\r\n1=TF_B\r\n2=TF_C\r\n"
     )
 
 
 def test_ini_patch_delete_then_redefine_collapses_a_repeated_section() -> None:
-    base_ini = (
-        "[Keep]\r\n"
-        "A=1\r\n"
-        "[Dup]\r\n"
-        "0=54,0\r\n"
-        "6=0,1\r\n"
-        "[Keep2]\r\n"
-        "B=2\r\n"
-        "[Dup]\r\n"
-        "0=53,0\r\n"
+    base = (
+        "[Keep]\r\nA=1\r\n[Dup]\r\n0=54,0\r\n6=0,1\r\n"
+        "[Keep2]\r\nB=2\r\n[Dup]\r\n0=53,0\r\n"
     )
-    patch = parse_ini_patch(
-        "[-Dup]\n[Dup]\n0=54,0\n1=0,1\n",
-        source_path=Path("aimo.patch.ini"),
-    )
+    patch = parse_ini_patch("[-Dup]\n[Dup]\n0=54,0\n1=0,1\n", source_path=SOURCE)
 
-    assert apply_ini_patch(base_ini, patch) == (
+    assert patch.apply(base) == (
         "[Keep]\r\nA=1\r\n[Keep2]\r\nB=2\r\n\r\n[Dup]\r\n0=54,0\r\n1=0,1\r\n"
     )
 
 
-def test_ini_patch_unset_in_an_absent_section_creates_nothing() -> None:
-    base_ini = "; comment\nRoot=1\n[Present]\nA=1\n"
+def test_ini_patch_delete_in_an_absent_section_creates_nothing() -> None:
     patch = parse_ini_patch(
-        "!Root\n[Missing]\n!Key\n[Present]\n!A\n",
-        source_path=Path("x.patch.ini"),
+        "-Root\n[Missing]\n-Key\n[Present]\n-A\n", source_path=SOURCE
     )
 
-    assert apply_ini_patch(base_ini, patch) == "; comment\n[Present]\n"
+    assert (
+        patch.apply("; comment\nRoot=1\n[Present]\nA=1\n") == "; comment\n[Present]\n"
+    )
 
 
-def test_toml_patch_applies_symmetric_plaintext_edits(
-    tmp_path: Path,
-) -> None:
-    patch_file = tmp_path / "config.patch.toml"
-    patch_file.write_text(
+def test_ini_patch_tolerates_hash_comments_in_the_target() -> None:
+    patch = parse_ini_patch("[A]\nKey=2\n", source_path=SOURCE)
+
+    assert patch.apply("[A] # note\n#Key=1\nKey=1\n") == "[A] # note\n#Key=1\nKey=2\n"
+
+
+def test_toml_patch_applies_every_edit_in_order() -> None:
+    patch = parse_toml_patch(
         """
-[[text]]
+[[edit]]
 op = "prepend"
-content = "; Header banner"
+content = "; Header"
 
-[[text]]
+[[edit]]
 op = "replace"
-target = "Renderer=auto"
-replacement = "Renderer=opengl"
+match = "Renderer=auto"
+content = "Renderer=opengl"
 
-[[text]]
+[[edit]]
 op = "insert_after"
-anchor = "[Video]"
+match = "[Video]"
 content = "; Managed by Mentara"
 
-[[text]]
+[[edit]]
 op = "insert_before"
-anchor = "Renderer=opengl"
+match = "Renderer=opengl"
 content = "VSync=yes"
 
-[[text]]
-op = "delete_lines"
-contains = "RemoveThisLine"
+[[edit]]
+op = "delete"
+match = "RemoveThisLine"
 
-[[text]]
+[[edit]]
 op = "append"
 content = "; Footer"
 """,
-        encoding="utf-8",
+        source_path=Path("config.patch.toml"),
     )
 
-    base = "[Video]\nRenderer=auto\nRemoveThisLine=1\n"
-
-    edits = parse_toml_patch(
-        patch_file.read_text(encoding="utf-8"),
-        source_path=patch_file,
+    assert patch.edits == (
+        TextPrepend("; Header"),
+        TextReplace("Renderer=auto", "Renderer=opengl"),
+        TextInsertAfter("[Video]", "; Managed by Mentara"),
+        TextInsertBefore("Renderer=opengl", "VSync=yes"),
+        TextDelete("RemoveThisLine"),
+        TextAppend("; Footer"),
     )
-    assert len(edits) == 6
-    assert isinstance(edits[2], InsertAfter)
-    assert isinstance(edits[3], InsertBefore)
-
-    result = apply_patch_chain(
-        base,
-        (PatchSpec(PatchKind.TOML, patch_file, "layer:one"),),
+    assert patch.apply("[Video]\nRenderer=auto\nRemoveThisLine=1\n") == (
+        "; Header\n[Video]\n; Managed by Mentara\n"
+        "VSync=yes\nRenderer=opengl\n; Footer\n"
     )
-    assert result.startswith("; Header banner\n")
-    assert "; Managed by Mentara\n" in result
-    assert "VSync=yes\nRenderer=opengl\n" in result
-    assert "RemoveThisLine" not in result
-    assert result.endswith("; Footer\n")
 
 
-def test_patch_errors_on_invalid_syntax_or_missing_required_anchor(
-    tmp_path: Path,
-) -> None:
-    bad_ini = tmp_path / "bad.patch.ini"
-    bad_ini.write_text("[Section]\nMalformedLineWithoutEquals\n", encoding="utf-8")
-    with pytest.raises(OverlayError, match="expected 'Key=Value'"):
-        parse_ini_patch(
-            bad_ini.read_text(encoding="utf-8"),
-            source_path=bad_ini,
-        )
-
-    bad_toml = tmp_path / "bad.patch.toml"
-    bad_toml.write_text(
-        '[[text]]\nop = "replace"\ntarget = "MissingAnchor"\nreplacement = "X"\n',
-        encoding="utf-8",
+@pytest.mark.parametrize(
+    "edit",
+    [
+        'op = "replace"\nmatch = "Missing"\ncontent = "X"',
+        'op = "insert_before"\nmatch = "Missing"\ncontent = "X"',
+        'op = "insert_after"\nmatch = "Missing"\ncontent = "X"',
+        'op = "delete"\nmatch = "Missing"',
+    ],
+)
+def test_toml_edits_with_a_match_fail_unless_optional(edit: str) -> None:
+    source = Path("bad.patch.toml")
+    required = parse_toml_patch(f"[[edit]]\n{edit}\n", source_path=source)
+    optional = parse_toml_patch(
+        f"[[edit]]\n{edit}\nrequired = false\n", source_path=source
     )
-    with pytest.raises(OverlayError, match="MissingAnchor"):
-        apply_patch_chain(
-            "Hello=World\n",
-            (PatchSpec(PatchKind.TOML, bad_toml, "layer:test"),),
-        )
 
-    stray_field_toml = tmp_path / "stray.patch.toml"
-    stray_field_toml.write_text(
-        '[[text]]\nop = "append"\ncontent = "ok"\ntarget = "illegal_field"\n',
-        encoding="utf-8",
+    with pytest.raises(OverlayError, match="Missing"):
+        required.apply("Hello=World\n")
+    assert optional.apply("Hello=World\n") == "Hello=World\n"
+
+
+@pytest.mark.parametrize(
+    ("text", "error"),
+    [
+        (
+            '[[edit]]\nop = "append"\ncontent = "ok"\nmatch = "x"\n',
+            "Unexpected keyword",
+        ),
+        (
+            '[[edit]]\nop = "replace"\nmatch = ""\ncontent = "x"\n',
+            "at least 1 character",
+        ),
+        ('[[edit]]\nop = "rename"\n', "does not match any of the expected tags"),
+        ("edit = []\n", "at least 1 item"),
+        ('[[text]]\nop = "append"\ncontent = "x"\n', "edit"),
+        ("[[edit]\n", "Invalid overlay patch"),
+    ],
+)
+def test_toml_patch_rejects_malformed_documents(text: str, error: str) -> None:
+    with pytest.raises(OverlayError, match=error):
+        parse_toml_patch(text, source_path=Path("bad.patch.toml"))
+
+
+def test_apply_patches_reads_each_file_in_its_format(tmp_path: Path) -> None:
+    ini, toml = tmp_path / "a.patch.ini", tmp_path / "a.ini.patch.toml"
+    ini.write_text("[A]\nKey=2\n", encoding="utf-8")
+    toml.write_text('[[edit]]\nop = "append"\ncontent = "; end"\n', encoding="utf-8")
+    specs = (
+        PatchSpec(PatchFormat.INI, ini, "layer:one"),
+        PatchSpec(PatchFormat.TOML, toml, "layer:two"),
     )
-    with pytest.raises(OverlayError, match="Extra inputs are not permitted"):
-        parse_toml_patch(
-            stray_field_toml.read_text(encoding="utf-8"),
-            source_path=stray_field_toml,
-        )
+
+    assert apply_patches("[A]\r\nKey=1\r\n", specs) == "[A]\r\nKey=2\r\n; end\r\n"
+    with pytest.raises(OverlayError, match="Failed to read"):
+        apply_patches("", (PatchSpec(PatchFormat.INI, tmp_path / "gone", "x"),))

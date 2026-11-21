@@ -13,16 +13,23 @@ from mentara.assets import (
     find_asset_sources,
 )
 from mentara.config import load_config
+from mentara.layout import (
+    ArchivePlacement,
+    PatchFormat,
+    PatchPlacement,
+    TextFormat,
+    is_archive_name,
+    parse_patch_name,
+    place,
+)
 from mentara.patcher import (
     INIAppend,
     INIKeyOp,
     INIPatch,
     INISet,
     INIUpdateSection,
-    PatchKind,
-    parse_ini_patch,
-    parse_patch_target,
-    parse_toml_patch,
+    PatchSpec,
+    load_patch,
 )
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -35,7 +42,6 @@ LAYERS = (BASE_LAYER, PHOBOS_LAYER, ENHANCE_LAYER)
 _ENGINE_SUFFIXES = frozenset({".dll", ".exe", ".edb", ".pdb"})
 _HIDE_VERSION_RE = re.compile(r"-HideVersionWarning=([^\s\"'`,\]]+)")
 _EXPANSION_MIX_RE = re.compile(r"expandmo\d{2}\.mix")
-_MIX_PATCH_SUFFIX = ".patch.mix"
 _DEFINE_HOOK_RE = re.compile(r"DEFINE_HOOK\(\s*(0x[0-9A-Fa-f]+),\s*(\w+),\s*(\d+)\)")
 _HOOK_SECTION = ".syhks00"
 # Syringe's hookdecl is 16-byte aligned: address, size, name, padding.
@@ -48,24 +54,30 @@ def _layer_files(layer: str) -> list[Path]:
     return sorted(path for path in (PROJECT_DIR / layer).rglob("*") if path.is_file())
 
 
-def _patch_files(layer: str) -> list[tuple[Path, Path, PatchKind]]:
-    # (patch file or fragment, target path in the layer, kind)
+def _patch_files(layer: str) -> list[tuple[Path, Path, TextFormat]]:
+    # (patch file or fragment, virtual path it patches, format)
     root = PROJECT_DIR / layer
-    return [
-        (path, *target)
-        for path in _layer_files(layer)
-        if (target := parse_patch_target(path.relative_to(root))) is not None
-    ]
+    found: list[tuple[Path, Path, TextFormat]] = []
+    for path in _layer_files(layer):
+        match place(path.relative_to(root)):
+            case PatchPlacement(path=target, patch=patch_format):
+                found.append((path, target, patch_format))
+            case ArchivePlacement(
+                archive=archive,
+                member=member,
+                patch=PatchFormat.INI | PatchFormat.TOML as patch_format,
+            ):
+                found.append((path, archive.joinpath(*member), patch_format))
+    return found
 
 
 def _ini_patches(layer: str) -> dict[Path, list[INIPatch]]:
     # Every INI patch of a layer, grouped by target: a patch directory's
     # fragments, in name order, form one patch.
     patches: dict[Path, list[INIPatch]] = {}
-    for path, target, kind in _patch_files(layer):
-        if kind is PatchKind.INI:
-            text = path.read_text(encoding="utf-8")
-            patch = parse_ini_patch(text, source_path=path)
+    for path, target, patch_format in _patch_files(layer):
+        patch = load_patch(PatchSpec(patch_format, path, layer))
+        if isinstance(patch, INIPatch):
             patches.setdefault(target, []).append(patch)
     return patches
 
@@ -175,13 +187,9 @@ def test_new_archives_load_with_the_expansion_mixes(layer: str) -> None:
     )
 
     for path in (PROJECT_DIR / layer).iterdir():
-        name = path.name.casefold()
-        archive = (
-            name.removesuffix(_MIX_PATCH_SUFFIX) + ".mix"
-            if name.endswith(_MIX_PATCH_SUFFIX)
-            else name
-        )
-        if archive.endswith(".mix"):
+        patch = parse_patch_name(path.name)
+        archive = (path.name if patch is None else patch.target).casefold()
+        if is_archive_name(archive):
             assert archive in existing or _EXPANSION_MIX_RE.fullmatch(archive), path
 
 
@@ -190,13 +198,9 @@ def test_every_shipped_patch_parses(layer: str) -> None:
     patches = _patch_files(layer)
 
     assert patches
-    for path, _, kind in patches:
-        text = path.read_text(encoding="utf-8")
-        match kind:
-            case PatchKind.INI:
-                assert parse_ini_patch(text, source_path=path).operations, path
-            case PatchKind.TOML:
-                assert parse_toml_patch(text, source_path=path), path
+    for path, _, patch_format in patches:
+        patch = load_patch(PatchSpec(patch_format, path, layer))
+        assert patch.operations if isinstance(patch, INIPatch) else patch.edits, path
 
 
 @pytest.mark.parametrize("layer", LAYERS)

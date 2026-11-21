@@ -1,26 +1,41 @@
-"""Text-level INI/map/KV and TOML overlay patch merging."""
+"""Text patches: INI section and key edits, and TOML line-edit scripts.
+
+INI patches (any INI-syntax target, with or without sections):
+
+- `[Section]` selects a section; lines above the first header edit the
+  root scope of sectionless files such as `.cfg` and `.inj`.
+- `Key=Value` sets every `Key` line, or adds it if there is none.
+- `+=Value` adds `Value` under the next free integer key.
+- `-Key` deletes every `Key` line; `[-Section]` deletes the section.
+- `;` starts a comment.
+
+A section repeated in the target is edited in every copy, so the result
+does not depend on which copy the engine reads.
+
+TOML patches are an array of `[[edit]]` tables, each with an `op`:
+
+- `replace`: every occurrence of `match` becomes `content`;
+- `insert_before` / `insert_after`: the `content` lines go before or
+  after every line containing `match`;
+- `delete`: every line containing `match` goes;
+- `prepend` / `append`: `content` goes at the start or the end.
+
+An edit with a `match` fails when nothing matches, unless it sets
+`required = false`.
+"""
 
 import tomllib
 from dataclasses import dataclass, replace
-from enum import StrEnum
-from pathlib import Path
-from typing import Annotated, Final, Literal, Self, assert_never
-lazy from collections.abc import Sequence
+from typing import Annotated, Final, Literal, assert_never
+lazy from collections.abc import Callable, Sequence
+lazy from pathlib import Path
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationError,
-)
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from mentara.errors import OverlayError
+from mentara.layout import PatchFormat, TextFormat
 
 __all__ = [
-    "INI_PATCH_EXTENSIONS",
-    "TOML_PATCH_SUFFIX",
-    "AppendText",
-    "DeleteLines",
     "INIAppend",
     "INIDeleteSection",
     "INIKeyOp",
@@ -29,66 +44,43 @@ __all__ = [
     "INISet",
     "INIUnset",
     "INIUpdateSection",
-    "InsertAfter",
-    "InsertBefore",
-    "PatchKind",
+    "Patch",
     "PatchSpec",
-    "PrependText",
-    "ReplaceText",
+    "TextAppend",
+    "TextDelete",
     "TextEdit",
-    "TextOpKind",
-    "apply_ini_patch",
-    "apply_patch_chain",
-    "apply_text_edit",
+    "TextInsertAfter",
+    "TextInsertBefore",
+    "TextPatch",
+    "TextPrepend",
+    "TextReplace",
+    "apply_patches",
+    "load_patch",
     "parse_ini_patch",
-    "parse_patch_target",
     "parse_toml_patch",
 ]
 
-# Directly determinable INI and key-value text formats:
-# `<stem>.patch.<ext>` targets `<stem>.<ext>`.
-INI_PATCH_EXTENSIONS: Final[tuple[str, ...]] = (
-    "ini",
-    "map",
-    "yrm",
-    "mpr",
-    "cfg",
-    "inj",
-)
-TOML_PATCH_SUFFIX: Final[str] = ".patch.toml"
-_PATCH_MARKER: Final[str] = ".patch."
-
-
-class PatchKind(StrEnum):
-    """Supported declarative text patch formats."""
-
-    INI = "ini"
-    TOML = "toml"
-
-
-class TextOpKind(StrEnum):
-    """Line or block operation tag in a `.patch.toml` file."""
-
-    REPLACE = "replace"
-    INSERT_AFTER = "insert_after"
-    INSERT_BEFORE = "insert_before"
-    DELETE_LINES = "delete_lines"
-    APPEND = "append"
-    PREPEND = "prepend"
+# Westwood files use CRLF; a patch that creates one does too.
+_INI_NEWLINE: Final[str] = "\r\n"
+_TEXT_NEWLINE: Final[str] = "\n"
+_STRICT: Final[ConfigDict] = ConfigDict(extra="forbid")
+# Comment markers in target files, which are not always Westwood's; a
+# patch's own comments start with `;` only.
+_COMMENTS: Final[tuple[str, ...]] = (";", "#")
 
 
 @dataclass(frozen=True, slots=True)
 class PatchSpec:
-    """Descriptor pointing to a patch file in an overlay layer."""
+    """A text patch file of a layer, in INI or TOML format."""
 
-    kind: PatchKind
+    format: TextFormat
     source_path: Path
     layer_label: str
 
 
 @dataclass(frozen=True, slots=True)
 class INISet:
-    """Set or update `key=value` within a section or top-level scope."""
+    """`Key=Value`: set or add a key."""
 
     key: str
     value: str
@@ -96,14 +88,14 @@ class INISet:
 
 @dataclass(frozen=True, slots=True)
 class INIUnset:
-    """Remove `key` from a section or top-level scope."""
+    """`-Key`: delete a key."""
 
     key: str
 
 
 @dataclass(frozen=True, slots=True)
 class INIAppend:
-    """Append `value` at the next integer key in a section."""
+    """`+=Value`: add a value under the next free integer key."""
 
     value: str
 
@@ -112,496 +104,324 @@ type INIKeyOp = INISet | INIUnset | INIAppend
 
 
 @dataclass(frozen=True, slots=True)
-class INIDeleteSection:
-    """Delete an entire `[section]` block from an INI document."""
-
-    section: str
-
-
-@dataclass(frozen=True, slots=True)
 class INIUpdateSection:
-    """Apply ordered key operations to `[section]` or root scope."""
+    """`[Section]` and its key operations; `None` is the root scope."""
 
     section: str | None
     operations: tuple[INIKeyOp, ...]
 
 
-type INISectionOp = INIDeleteSection | INIUpdateSection
+@dataclass(frozen=True, slots=True)
+class INIDeleteSection:
+    """`[-Section]`: delete every copy of a section."""
+
+    section: str
+
+
+type INISectionOp = INIUpdateSection | INIDeleteSection
 
 
 @dataclass(frozen=True, slots=True)
 class INIPatch:
-    """Parsed INI/map/KV patch containing ordered section operations."""
+    """Parsed INI patch: section operations in file order."""
 
+    source_path: Path
     operations: tuple[INISectionOp, ...] = ()
 
+    def apply(self, text: str) -> str:
+        """Apply the patch, keeping comments and line endings.
+
+        Args:
+            text: Target text (empty to create the file).
+
+        Returns:
+            The patched text.
+        """
+        if not self.operations:
+            return text
+        blocks = _parse_ini_blocks(text.splitlines())
+        for operation in self.operations:
+            match operation:
+                case INIUpdateSection(section=section, operations=key_ops):
+                    blocks = _update_ini_section(blocks, section, key_ops)
+                case INIDeleteSection(section=section):
+                    folded = section.casefold()
+                    blocks = tuple(b for b in blocks if b.folded_name != folded)
+                case _:
+                    assert_never(operation)
+        lines = [line for block in blocks for line in block.lines]
+        newline = _detect_newline(text, default=_INI_NEWLINE)
+        return newline.join(lines) + newline if lines else ""
+
 
 @dataclass(frozen=True, slots=True)
-class ReplaceText:
-    """Replace occurrences of `target` with `replacement`."""
+class TextReplace:
+    """Replace every occurrence of `match` with `content`."""
 
-    target: str
-    replacement: str
-    required: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class InsertAfter:
-    """Insert `content` immediately after lines matching `anchor`."""
-
-    anchor: str
+    __pydantic_config__ = _STRICT
+    match: Annotated[str, Field(min_length=1)]
     content: str
     required: bool = True
+    op: Literal["replace"] = "replace"
 
 
 @dataclass(frozen=True, slots=True)
-class InsertBefore:
-    """Insert `content` immediately before lines matching `anchor`."""
+class TextInsertBefore:
+    """Insert the `content` lines before each line with `match`."""
 
-    anchor: str
+    __pydantic_config__ = _STRICT
+    match: Annotated[str, Field(min_length=1)]
     content: str
     required: bool = True
+    op: Literal["insert_before"] = "insert_before"
 
 
 @dataclass(frozen=True, slots=True)
-class DeleteLines:
-    """Delete every line containing `contains`."""
+class TextInsertAfter:
+    """Insert the `content` lines after each line with `match`."""
 
-    contains: str
-
-
-@dataclass(frozen=True, slots=True)
-class AppendText:
-    """Append `content` at the end of a plaintext document."""
-
+    __pydantic_config__ = _STRICT
+    match: Annotated[str, Field(min_length=1)]
     content: str
+    required: bool = True
+    op: Literal["insert_after"] = "insert_after"
 
 
 @dataclass(frozen=True, slots=True)
-class PrependText:
-    """Prepend `content` at the start of a plaintext document."""
+class TextDelete:
+    """Delete every line containing `match`."""
 
+    __pydantic_config__ = _STRICT
+    match: Annotated[str, Field(min_length=1)]
+    required: bool = True
+    op: Literal["delete"] = "delete"
+
+
+@dataclass(frozen=True, slots=True)
+class TextPrepend:
+    """Put `content` at the start of the text."""
+
+    __pydantic_config__ = _STRICT
     content: str
+    op: Literal["prepend"] = "prepend"
+
+
+@dataclass(frozen=True, slots=True)
+class TextAppend:
+    """Put `content` at the end of the text."""
+
+    __pydantic_config__ = _STRICT
+    content: str
+    op: Literal["append"] = "append"
 
 
 type TextEdit = (
-    ReplaceText | InsertAfter | InsertBefore | DeleteLines | AppendText | PrependText
+    TextReplace
+    | TextInsertBefore
+    | TextInsertAfter
+    | TextDelete
+    | TextPrepend
+    | TextAppend
 )
 
 
-def parse_patch_target(relative_path: Path) -> tuple[Path, PatchKind] | None:
-    """Resolve whether `relative_path` is a declarative overlay patch.
-
-    Recognises:
-    - `<stem>.patch.<ext>` -> `<stem>.<ext>` (`PatchKind.INI`) for
-      `<ext>` in `INI_PATCH_EXTENSIONS` (`ini`, `map`, `yrm`, `mpr`,
-      `cfg`, `inj`).
-    - `<target>.patch.toml` -> `<target>` (`PatchKind.TOML`) for general
-      plaintext files.
-    - A fragment of a patch directory: a directory named like a patch
-      holds that patch split across files ending in its own extension
-      (`*.ini` in `rules.patch.ini/`, `*.toml` in `a.cfg.patch.toml/`).
-      Every fragment targets the directory's target; the planner applies
-      them in name order.
-
-    Args:
-        relative_path: Relative path scanned inside an overlay layer.
-
-    Returns:
-        `(target_relative_path, PatchKind)` if `relative_path` is a
-        patch file or fragment, otherwise `None`.
-    """
-    parent = relative_path.parent
-    directory = _parse_patch_name(parent) if parent.name else None
-    if directory is None:
-        return _parse_patch_name(relative_path)
-    name, extension = relative_path.name.casefold(), parent.suffix.casefold()
-    return directory if name.endswith(extension) and name != extension else None
+@dataclass(frozen=True, slots=True)
+class _TOMLDocument:
+    __pydantic_config__ = _STRICT
+    edit: Annotated[
+        tuple[Annotated[TextEdit, Field(discriminator="op")], ...],
+        Field(min_length=1),
+    ]
 
 
-def _parse_patch_name(relative_path: Path) -> tuple[Path, PatchKind] | None:
-    name = relative_path.name
-    name_folded = name.casefold()
+_TOML_DOCUMENT: Final[TypeAdapter[_TOMLDocument]] = TypeAdapter(_TOMLDocument)
 
-    for ext in INI_PATCH_EXTENSIONS:
-        suffix = f"{_PATCH_MARKER}{ext}"
-        if name_folded.endswith(suffix) and len(name) > len(suffix):
-            stem = name[: -len(suffix)]
-            original_ext = name[-len(ext) :]
-            target_name = f"{stem}.{original_ext}"
-            return _with_parent(relative_path.parent, target_name), PatchKind.INI
 
-    if name_folded.endswith(TOML_PATCH_SUFFIX) and len(name) > len(TOML_PATCH_SUFFIX):
-        target_name = name[: -len(TOML_PATCH_SUFFIX)]
-        return _with_parent(relative_path.parent, target_name), PatchKind.TOML
+@dataclass(frozen=True, slots=True)
+class TextPatch:
+    """Parsed TOML patch: line edits in file order."""
 
-    return None
+    source_path: Path
+    edits: tuple[TextEdit, ...]
+
+    def apply(self, text: str) -> str:
+        """Apply every edit in order.
+
+        Args:
+            text: Target text.
+
+        Returns:
+            The patched text.
+
+        Raises:
+            OverlayError: If a required `match` is not found.
+        """
+        for edit in self.edits:
+            text = self._apply_edit(text, edit)
+        return text
+
+    def _apply_edit(self, text: str, edit: TextEdit) -> str:
+        newline = _detect_newline(text, default=_TEXT_NEWLINE)
+        match edit:
+            case TextReplace(match=needle, content=content, required=required):
+                self._require(needle, found=needle in text, required=required)
+                return text.replace(needle, content)
+            case TextInsertBefore(match=needle, content=content, required=required):
+                lines = _edit_lines(
+                    text, needle, lambda line: (*content.splitlines(), line)
+                )
+                self._require(needle, found=lines is not None, required=required)
+                return text if lines is None else _join_lines(lines, newline)
+            case TextInsertAfter(match=needle, content=content, required=required):
+                lines = _edit_lines(
+                    text, needle, lambda line: (line, *content.splitlines())
+                )
+                self._require(needle, found=lines is not None, required=required)
+                return text if lines is None else _join_lines(lines, newline)
+            case TextDelete(match=needle, required=required):
+                lines = _edit_lines(text, needle, lambda _: ())
+                self._require(needle, found=lines is not None, required=required)
+                return text if lines is None else _join_lines(lines, newline)
+            case TextPrepend(content=content):
+                return content + newline + text
+            case TextAppend(content=content):
+                ended = not text or text.endswith(("\n", "\r\n"))
+                return (text if ended else text + newline) + content + newline
+            case _:
+                assert_never(edit)
+
+    def _require(self, needle: str, *, found: bool, required: bool) -> None:
+        if required and not found:
+            raise OverlayError.patch_target_not_found(self.source_path, needle)
+
+
+type Patch = INIPatch | TextPatch
 
 
 def parse_ini_patch(text: str, *, source_path: Path) -> INIPatch:
-    """Parse a `.patch.{ini,map,yrm,mpr,cfg,inj}` patch document.
-
-    Directives may appear either inside `[Section]` blocks or at the
-    top-level root scope (for sectionless `.cfg` and `.inj` files).
-    A section repeated in the target file is edited in every
-    occurrence, so the result does not depend on which duplicate the
-    game engine reads:
-    - `Key=Value`: set or update every `Key` line (preserving spacing
-      around `=`), or append it to the last occurrence if absent.
-    - `!Key` or `-Key`: delete every `Key` line.
-    - `+=Value` or `+Key=Value`: append `Value` to the last occurrence
-      using the next integer index across all occurrences.
-    - `[-Section]`: delete every `[Section]` block.
+    """Parse an INI patch.
 
     Args:
-        text: Raw UTF-8 text of the patch file.
-        source_path: File path used for error reporting.
+        text: Patch text.
+        source_path: Patch file, for error messages.
 
     Returns:
-        Parsed `INIPatch`.
+        The parsed `INIPatch`.
 
     Raises:
-        OverlayError: If a section header or key directive is malformed.
+        OverlayError: If a header or key line is malformed.
     """
     operations: list[INISectionOp] = []
-    current_section: str | None = None
-    current_ops: list[INIKeyOp] = []
+    section: str | None = None
+    key_ops: list[INIKeyOp] = []
 
-    def _flush_current() -> None:
-        nonlocal current_ops
-        if current_ops:
-            operations.append(
-                INIUpdateSection(
-                    section=current_section,
-                    operations=tuple(current_ops),
-                ),
-            )
-            current_ops = []
+    def flush() -> None:
+        if key_ops:
+            operations.append(INIUpdateSection(section, tuple(key_ops)))
+            key_ops.clear()
 
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        stripped = raw_line.strip()
-        if not stripped or stripped.startswith((";", "#")):
+    for line_no, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith(";"):
             continue
-
-        if stripped.startswith("[") and stripped.endswith("]"):
-            _flush_current()
-            header = stripped[1:-1].strip()
-            if not header:
-                detail = f"empty section header on line {line_no}"
-                raise OverlayError.invalid_patch(source_path, detail)
-            if header.startswith("-") and len(header) > 1:
+        if line.startswith("[") and line.endswith("]"):
+            flush()
+            header = line[1:-1].strip()
+            if header.startswith("-"):
                 operations.append(
-                    INIDeleteSection(section=header[1:].strip()),
+                    INIDeleteSection(_named(header[1:], line_no, source_path))
                 )
-                current_section = None
+                section = None
             else:
-                current_section = header
+                section = _named(header, line_no, source_path)
             continue
-
-        current_ops.append(_parse_ini_op(stripped, source_path, line_no))
-
-    _flush_current()
-    return INIPatch(operations=tuple(operations))
+        key_ops.append(_parse_ini_key_op(line, line_no, source_path))
+    flush()
+    return INIPatch(source_path, tuple(operations))
 
 
-def parse_toml_patch(
-    text: str,
-    *,
-    source_path: Path,
-) -> tuple[TextEdit, ...]:
-    """Parse and validate a `.patch.toml` plaintext patch document.
+def parse_toml_patch(text: str, *, source_path: Path) -> TextPatch:
+    """Parse a TOML patch.
 
     Args:
-        text: Raw UTF-8 TOML text.
-        source_path: Patch file path for error reporting.
+        text: Patch text.
+        source_path: Patch file, for error messages.
 
     Returns:
-        Ordered tuple of `TextEdit` operations.
+        The parsed `TextPatch`.
 
     Raises:
-        OverlayError: If TOML syntax or schema validation fails.
+        OverlayError: If the TOML is invalid or an edit is malformed.
     """
     try:
-        payload = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
+        document = _TOML_DOCUMENT.validate_python(tomllib.loads(text))
+    except (tomllib.TOMLDecodeError, ValidationError) as exc:
         raise OverlayError.invalid_patch(source_path, str(exc)) from exc
-
-    try:
-        doc = _TOMLPatchDocument.parse(payload)
-    except ValidationError as exc:
-        raise OverlayError.invalid_patch(source_path, str(exc)) from exc
-
-    return tuple(item.to_edit() for item in doc.text)
+    return TextPatch(source_path, document.edit)
 
 
-def apply_ini_patch(
-    base_text: str,
-    patch: INIPatch,
-    *,
-    default_newline: str = "\r\n",
-) -> str:
-    """Apply an `INIPatch` while preserving comments and line endings.
-
-    The text is parsed once into header-delimited blocks, each section
-    operation rewrites whole blocks, and the blocks are joined again, so
-    a `[Section]` repeated in `base_text` is edited in every occurrence.
+def load_patch(spec: PatchSpec) -> Patch:
+    """Read and parse a patch file.
 
     Args:
-        base_text: Existing INI/map/KV text (empty if creating a file).
-        patch: Structured section and key operations.
-        default_newline: Line ending used when `base_text` has no lines.
+        spec: The patch file and its format.
 
     Returns:
-        Updated text.
-    """
-    if not patch.operations:
-        return base_text
-
-    newline = _detect_newline(base_text, default=default_newline)
-    blocks = _parse_ini_blocks(base_text.splitlines())
-    for section_op in patch.operations:
-        match section_op:
-            case INIDeleteSection(section=section):
-                folded_name = section.casefold()
-                blocks = tuple(
-                    block for block in blocks if block.folded_name != folded_name
-                )
-            case INIUpdateSection(section=section, operations=key_ops):
-                blocks = _update_ini_section(blocks, section, key_ops)
-            case _:
-                assert_never(section_op)
-
-    lines = [line for block in blocks for line in block.lines]
-    return newline.join(lines) + newline if lines else ""
-
-
-def apply_text_edit(
-    text: str,
-    edit: TextEdit,
-    *,
-    patch_path: Path,
-) -> str:
-    """Apply a single `TextEdit` variant to `text`.
-
-    Args:
-        text: Input plaintext content.
-        edit: Plaintext edit variant.
-        patch_path: Source patch file for diagnostic reporting.
-
-    Returns:
-        Transformed plaintext content.
+        The parsed patch.
 
     Raises:
-        OverlayError: If a required target or anchor string is missing.
+        OverlayError: If the file cannot be read or does not parse.
     """
-    newline = _detect_newline(text, default="\n")
-    match edit:
-        case ReplaceText():
-            result = _replace_text(text, edit, patch_path=patch_path)
-        case InsertAfter() | InsertBefore():
-            result = _insert_around_anchor(
-                text,
-                edit,
-                newline=newline,
-                patch_path=patch_path,
-            )
-        case DeleteLines(contains=contains):
-            kept = [line for line in text.splitlines() if contains not in line]
-            result = newline.join(kept) + (newline if kept else "")
-        case AppendText(content=content):
-            prefix = (
-                text if not text or text.endswith(("\n", "\r\n")) else text + newline
-            )
-            result = prefix + content + newline
-        case PrependText(content=content):
-            result = content + newline + text
+    try:
+        text = spec.source_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OverlayError.unreadable_file(spec.source_path, str(exc)) from exc
+    match spec.format:
+        case PatchFormat.INI:
+            return parse_ini_patch(text, source_path=spec.source_path)
+        case PatchFormat.TOML:
+            return parse_toml_patch(text, source_path=spec.source_path)
         case _:
-            assert_never(edit)
-    return result
+            assert_never(spec.format)
 
 
-def apply_patch_chain(
-    base_text: str,
-    patches: Sequence[PatchSpec],
-) -> str:
-    """Apply an ordered chain of INI/map/KV and TOML text patches.
+def apply_patches(text: str, specs: Sequence[PatchSpec]) -> str:
+    """Apply patch files in order, lowest layer first.
 
     Args:
-        base_text: Initial file contents (or empty string).
-        patches: Ordered patches from lowest to highest overlay layer.
+        text: Target text (empty to create the file).
+        specs: Patch files to apply.
 
     Returns:
-        Final merged text.
+        The patched text.
 
     Raises:
-        OverlayError: If reading or applying any patch fails.
+        OverlayError: If a patch cannot be read, parsed or applied.
     """
-    current = base_text
-    for spec in patches:
-        try:
-            raw_patch = spec.source_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise OverlayError.unreadable_file(
-                spec.source_path,
-                str(exc),
-            ) from exc
-
-        match spec.kind:
-            case PatchKind.INI:
-                ini_patch = parse_ini_patch(
-                    raw_patch,
-                    source_path=spec.source_path,
-                )
-                current = apply_ini_patch(current, ini_patch)
-            case PatchKind.TOML:
-                text_edits = parse_toml_patch(
-                    raw_patch,
-                    source_path=spec.source_path,
-                )
-                for edit in text_edits:
-                    current = apply_text_edit(
-                        current,
-                        edit,
-                        patch_path=spec.source_path,
-                    )
-            case _:
-                assert_never(spec.kind)
-    return current
+    for spec in specs:
+        text = load_patch(spec).apply(text)
+    return text
 
 
-class _ReplaceOp(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    op: Literal[TextOpKind.REPLACE]
-    target: str = Field(min_length=1)
-    replacement: str
-    required: bool = True
-
-    def to_edit(self) -> ReplaceText:
-        return ReplaceText(
-            target=self.target,
-            replacement=self.replacement,
-            required=self.required,
-        )
-
-
-class _InsertAfterOp(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    op: Literal[TextOpKind.INSERT_AFTER]
-    anchor: str = Field(min_length=1)
-    content: str
-    required: bool = True
-
-    def to_edit(self) -> InsertAfter:
-        return InsertAfter(
-            anchor=self.anchor,
-            content=self.content,
-            required=self.required,
-        )
-
-
-class _InsertBeforeOp(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    op: Literal[TextOpKind.INSERT_BEFORE]
-    anchor: str = Field(min_length=1)
-    content: str
-    required: bool = True
-
-    def to_edit(self) -> InsertBefore:
-        return InsertBefore(
-            anchor=self.anchor,
-            content=self.content,
-            required=self.required,
-        )
-
-
-class _DeleteLinesOp(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    op: Literal[TextOpKind.DELETE_LINES]
-    contains: str = Field(min_length=1)
-
-    def to_edit(self) -> DeleteLines:
-        return DeleteLines(contains=self.contains)
-
-
-class _AppendOp(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    op: Literal[TextOpKind.APPEND]
-    content: str
-
-    def to_edit(self) -> AppendText:
-        return AppendText(content=self.content)
-
-
-class _PrependOp(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    op: Literal[TextOpKind.PREPEND]
-    content: str
-
-    def to_edit(self) -> PrependText:
-        return PrependText(content=self.content)
-
-
-type _TOMLTextOperation = Annotated[
-    _ReplaceOp
-    | _InsertAfterOp
-    | _InsertBeforeOp
-    | _DeleteLinesOp
-    | _AppendOp
-    | _PrependOp,
-    Field(discriminator="op"),
-]
-
-
-class _TOMLPatchDocument(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    text: tuple[_TOMLTextOperation, ...] = Field(min_length=1)
-
-    @classmethod
-    def parse(cls, payload: object) -> Self:
-        return cls.model_validate(payload)
-
-
-def _with_parent(parent: Path, name: str) -> Path:
-    return Path(name) if parent == Path() else parent / name
-
-
-def _parse_ini_op(
-    stripped: str,
-    source_path: Path,
-    line_no: int,
-) -> INIKeyOp:
-    if stripped.startswith(("!", "-")):
-        raw_key, _, _ = stripped[1:].partition("=")
-        clean_key = raw_key.strip()
-        if not clean_key:
-            detail = f"empty unset key on line {line_no}"
-            raise OverlayError.invalid_patch(source_path, detail)
-        return INIUnset(key=clean_key)
-
-    if stripped.startswith("+"):
-        _plus_key, sep, value = stripped.partition("=")
-        if not sep:
-            detail = f"expected '+=' on line {line_no}: {stripped!r}"
-            raise OverlayError.invalid_patch(source_path, detail)
-        return INIAppend(value=value.strip())
-
-    key, sep, value = stripped.partition("=")
-    if not sep:
-        detail = f"expected 'Key=Value' or '!Key' on line {line_no}: {stripped!r}"
+def _named(name: str, line_no: int, source_path: Path) -> str:
+    name = name.strip()
+    if not name:
+        detail = f"empty section name on line {line_no}"
         raise OverlayError.invalid_patch(source_path, detail)
+    return name
 
-    clean_key = key.strip()
-    if not clean_key:
-        detail = f"empty key name on line {line_no}"
-        raise OverlayError.invalid_patch(source_path, detail)
-    return INISet(key=clean_key, value=value.strip())
+
+def _parse_ini_key_op(line: str, line_no: int, source_path: Path) -> INIKeyOp:
+    key, sep, value = line.partition("=")
+    key, value = key.strip(), value.strip()
+    if key.startswith("-") and not sep and key[1:].strip():
+        return INIUnset(key[1:].strip())
+    if key == "+" and sep:
+        return INIAppend(value)
+    if key and sep and not key.startswith(("-", "+", "!", "#")):
+        return INISet(key, value)
+    detail = f"expected 'Key=Value', '+=Value' or '-Key' on line {line_no}: {line!r}"
+    raise OverlayError.invalid_patch(source_path, detail)
 
 
 def _detect_newline(text: str, *, default: str) -> str:
@@ -610,6 +430,24 @@ def _detect_newline(text: str, *, default: str) -> str:
     if "\n" in text:
         return "\n"
     return default
+
+
+def _join_lines(lines: Sequence[str], newline: str) -> str:
+    return newline.join(lines) + newline if lines else ""
+
+
+def _edit_lines(
+    text: str,
+    needle: str,
+    edit: Callable[[str], tuple[str, ...]],
+) -> list[str] | None:
+    # Lines with `needle` become `edit(line)`; `None` if there are none.
+    lines = text.splitlines()
+    if not any(needle in line for line in lines):
+        return None
+    return [
+        part for line in lines for part in (edit(line) if needle in line else (line,))
+    ]
 
 
 # A target may repeat a `[Section]` header or a key, and which copy the
@@ -633,13 +471,13 @@ type _Bodies = tuple[tuple[str, ...], ...]
 
 def _parse_ini_blocks(lines: Sequence[str]) -> tuple[_INIBlock, ...]:
     headers = [
-        (idx, name)
-        for idx, line in enumerate(lines)
-        if (name := _extract_section_header(line)) is not None
+        (index, name)
+        for index, line in enumerate(lines)
+        if (name := _section_name(line)) is not None
     ]
     # Block boundaries: each header line, then end of text. The first
     # boundary also ends the root block.
-    bounds = [*(idx for idx, _ in headers), len(lines)]
+    bounds = [*(index for index, _ in headers), len(lines)]
     sections = (
         _INIBlock(name.casefold(), lines[start], tuple(lines[start + 1 : end]))
         for (start, name), end in zip(headers, bounds[1:], strict=True)
@@ -652,22 +490,22 @@ def _update_ini_section(
     section: str | None,
     key_ops: Sequence[INIKeyOp],
 ) -> tuple[_INIBlock, ...]:
-    folded_name = None if section is None else section.casefold()
+    folded = None if section is None else section.casefold()
     targets = [
-        idx for idx, block in enumerate(blocks) if block.folded_name == folded_name
+        index for index, block in enumerate(blocks) if block.folded_name == folded
     ]
     if targets:
-        bodies = _apply_key_ops(tuple(blocks[idx].body for idx in targets), key_ops)
+        bodies = _apply_key_ops(tuple(blocks[index].body for index in targets), key_ops)
         updated = list(blocks)
-        for idx, body in zip(targets, bodies, strict=True):
-            updated[idx] = replace(blocks[idx], body=body)
+        for index, body in zip(targets, bodies, strict=True):
+            updated[index] = replace(blocks[index], body=body)
         return tuple(updated)
 
     # The root block always exists; only a named section can be absent.
     (body,) = _apply_key_ops(((),), key_ops)
     if section is None or not body:
         return blocks
-    return (*_end_with_blank_line(blocks), _INIBlock(folded_name, f"[{section}]", body))
+    return (*_end_with_blank_line(blocks), _INIBlock(folded, f"[{section}]", body))
 
 
 def _end_with_blank_line(blocks: tuple[_INIBlock, ...]) -> tuple[_INIBlock, ...]:
@@ -678,33 +516,35 @@ def _end_with_blank_line(blocks: tuple[_INIBlock, ...]) -> tuple[_INIBlock, ...]
 
 
 def _apply_key_ops(bodies: _Bodies, key_ops: Sequence[INIKeyOp]) -> _Bodies:
-    current = bodies
+    current: _Bodies = bodies
     for op in key_ops:
         match op:
-            case INIUnset(key=key):
-                current = tuple(_without_key(body, key) for body in current)
             case INISet(key=key, value=value):
                 current = _with_key(current, key, value)
+            case INIUnset(key=key):
+                current = _without_key(current, key)
             case INIAppend(value=value):
-                index = max(_next_numeric_key(body) for body in current)
+                index = max(_next_free_index(body) for body in current)
                 current = _append_line(current, f"{index}={value}")
             case _:
                 assert_never(op)
     return current
 
 
-def _without_key(body: tuple[str, ...], key: str) -> tuple[str, ...]:
-    folded_key = key.casefold()
-    return tuple(line for line in body if not _has_key(line, folded_key))
+def _without_key(bodies: _Bodies, key: str) -> _Bodies:
+    folded = key.casefold()
+    return tuple(
+        tuple(line for line in body if _key_of(line) != folded) for body in bodies
+    )
 
 
 def _with_key(bodies: _Bodies, key: str, value: str) -> _Bodies:
-    folded_key = key.casefold()
-    if not any(_has_key(line, folded_key) for body in bodies for line in body):
+    folded = key.casefold()
+    if not any(_key_of(line) == folded for body in bodies for line in body):
         return _append_line(bodies, f"{key}={value}")
     return tuple(
         tuple(
-            _with_value(line, value) if _has_key(line, folded_key) else line
+            _with_value(line, value) if _key_of(line) == folded else line
             for line in body
         )
         for body in bodies
@@ -713,103 +553,39 @@ def _with_key(bodies: _Bodies, key: str, value: str) -> _Bodies:
 
 def _append_line(bodies: _Bodies, line: str) -> _Bodies:
     *head, last = bodies
-    return (*head, _insert_at_body_tail(last, line))
-
-
-def _has_key(line: str, folded_key: str) -> bool:
-    found_key = _extract_key_name(line)
-    return found_key is not None and found_key.casefold() == folded_key
+    # A new key goes after the last key, before the trailing blanks.
+    end = len(last)
+    while end > 0 and not last[end - 1].strip():
+        end -= 1
+    return (*head, (*last[:end], line, *last[end:]))
 
 
 def _with_value(line: str, value: str) -> str:
-    before_eq, sep, after_eq = line.partition("=")
-    leading_ws = after_eq[: len(after_eq) - len(after_eq.lstrip(" \t"))]
-    return f"{before_eq}{sep}{leading_ws}{value}"
+    before, sep, after = line.partition("=")
+    spacing = after[: len(after) - len(after.lstrip(" \t"))]
+    return f"{before}{sep}{spacing}{value}"
 
 
-def _extract_section_header(line: str) -> str | None:
+def _section_name(line: str) -> str | None:
     stripped = line.strip()
-    if stripped.startswith("[") and "]" in stripped:
-        inside, _, trailing_raw = stripped[1:].partition("]")
-        trailing = trailing_raw.strip()
-        if not trailing or trailing.startswith((";", "#")):
-            return inside.strip()
-    return None
+    if not stripped.startswith("[") or "]" not in stripped:
+        return None
+    inside, _, trailing = stripped[1:].partition("]")
+    trailing = trailing.strip()
+    return inside.strip() if not trailing or trailing.startswith(_COMMENTS) else None
 
 
-def _extract_key_value(line: str) -> tuple[str, str] | None:
+def _key_of(line: str) -> str | None:
+    # The folded key of a `Key=Value` line, or `None` for anything else.
     stripped = line.strip()
-    if not stripped or stripped.startswith((";", "#", "[")):
+    if not stripped or stripped.startswith((*_COMMENTS, "[")):
         return None
-    raw_key, sep, raw_value = stripped.partition("=")
-    if not sep:
-        return None
-    key = raw_key.strip()
-    return (key, raw_value.strip()) if key else None
+    key, sep, _ = stripped.partition("=")
+    key = key.strip()
+    return key.casefold() if sep and key else None
 
 
-def _extract_key_name(line: str) -> str | None:
-    entry = _extract_key_value(line)
-    return entry[0] if entry is not None else None
-
-
-def _next_numeric_key(body: Sequence[str]) -> int:
-    max_index = -1
-    for line in body:
-        found_key = _extract_key_name(line)
-        if found_key is not None and found_key.isdigit():
-            max_index = max(max_index, int(found_key))
-    return max_index + 1
-
-
-def _insert_at_body_tail(body: tuple[str, ...], new_line: str) -> tuple[str, ...]:
-    insert_at = len(body)
-    while insert_at > 0 and not body[insert_at - 1].strip():
-        insert_at -= 1
-    return (*body[:insert_at], new_line, *body[insert_at:])
-
-
-def _replace_text(
-    text: str,
-    edit: ReplaceText,
-    *,
-    patch_path: Path,
-) -> str:
-    if edit.target not in text:
-        if edit.required:
-            raise OverlayError.patch_target_not_found(patch_path, edit.target)
-        return text
-    return text.replace(edit.target, edit.replacement)
-
-
-def _insert_around_anchor(
-    text: str,
-    edit: InsertAfter | InsertBefore,
-    *,
-    newline: str,
-    patch_path: Path,
-) -> str:
-    lines = text.splitlines()
-    out: list[str] = []
-    matched = False
-    inserted_lines = edit.content.splitlines()
-    insert_after = isinstance(edit, InsertAfter)
-
-    for line in lines:
-        if edit.anchor in line:
-            matched = True
-            if insert_after:
-                out.append(line)
-                out.extend(inserted_lines)
-            else:
-                out.extend(inserted_lines)
-                out.append(line)
-        else:
-            out.append(line)
-
-    if not matched:
-        if edit.required:
-            raise OverlayError.patch_target_not_found(patch_path, edit.anchor)
-        return text
-
-    return newline.join(out) + newline
+def _next_free_index(body: Sequence[str]) -> int:
+    keys = (_key_of(line) for line in body)
+    indices = [int(key) for key in keys if key is not None and key.isdigit()]
+    return max(indices, default=-1) + 1

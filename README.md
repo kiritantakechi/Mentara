@@ -7,8 +7,10 @@ Mentara 在启动游戏时自动维护一个与原版游戏目录解耦的虚拟
 - **原文件零污染**：游戏本体目录与自定义叠层目录均保持只读干净状态。
 - **文件级 + 文本条目级 + MIX 容器级正交叠层**：
   - 整文件覆盖（`.dll`、`.mix`、`.ini`）、文本级补丁与 MIX 容器级解密合成职责完全正交，可跨多层按序组合。
-  - **`<stem>.patch.{ini,map,yrm,mpr,cfg,inj}`（INI / 地图 / 键值级）**：直接由后缀确定目标格式（如 `ClientDefinitions.patch.ini` -> `ClientDefinitions.ini`、`c_aberration.patch.map` -> `c_aberration.map`、`aqrit.patch.cfg` -> `aqrit.cfg`、`Ares.dll.patch.inj` -> `Ares.dll.inj`）；支持分节与无节顶层 `Key=Value` 原地修改/新增（保留等号对齐）、`!Key` 删除键、`[-Section]` 删除整节、`+=Value` 自动按当前节最大数字键 `+1` 追加，完整保留注释与 CRLF 换行；目标文件中重复出现的同名节（如 MO `aimo.ini`）会在每一处同步修改/删除，结果与引擎读取哪一份重复键无关。
-  - **`<target>.patch.toml`（通用明文行/块级）**：`[[text]]` 对称操作集（`replace`、`insert_before` / `insert_after`、`prepend` / `append`、`delete_lines`），适用于 `.config`、`.xml`、`.edb`、`.txt` 等任意明文。
+  - **统一的补丁命名 `<name>.patch.<格式>`**：扩展名即补丁自身的格式，也可写成同名目录，内含该格式的分片（如 `rulesmo.patch.ini/allied.ini`），按文件名顺序合成一个补丁；完整语法见 [`overlays/README.md`](overlays/README.md) 的 Layer Layout 一节。
+    - **INI 语法（`ini`、`map`、`yrm`、`mpr`、`cfg`、`inj`）**：修补 `<name>.<格式>`，每个操作只有一种写法：`Key=Value` 设置或新增、`+=Value` 按下一个空闲数字键追加、`-Key` 删除键、`[-Section]` 删除整节；保留注释、等号对齐与 CRLF 换行，目标中重复出现的同名节（如 MO `aimo.ini`）每一处同步修改，结果与引擎读取哪一份无关。
+    - **`toml`**：任意明文 `<name>` 的行编辑脚本，`[[edit]]` 对称操作集（`replace`、`insert_before` / `insert_after`、`delete`、`prepend` / `append`），查找文本统一写 `match`、写入文本统一写 `content`，找不到 `match` 时默认报错（`required = false` 可关闭）。
+    - **`mix`**：把叠层中的 `.mix` 按 MIX ID 合并进 `<name>.mix`。
   - **`<archive>.mix/`、`<stem>.patch.mix` 与叠层加密 `.mix` 自动解密（MIX 容器级引擎）**：
     - 内置对称六级 MIX 解密与净化引擎（`S1` 标准包、`S2` MVLoader `MVMXV1` 分块 AES-256-GCM + HKDF-SHA256 + zlib 并支持从 `MVLoader.dll` PE32 动态提取密钥、`S2b` CryptoRuntime `0x0004FFFF` RC4-sub + MT19937 流加密包、`S3` Westwood RSA-320 + Blowfish-ECB、`S4` 防解包 `0xFFFFFFFF` 哨兵 / 伪造尺寸 / 加权区间调度 DP 重叠诱饵剔除与孤立 XCC LMD 雕刻、`S5a` 移位头、`S5b` 坏计数恢复），自动启用 OpenSSL `libcrypto` 硬件加速并零依赖回退至纯 Python。
     - 自动识别并跳过伪装为 `.mix` 的 Windows PE DLL（`MZ` + `PE\x00\x00`），避免误损扩展二进制。
@@ -16,7 +18,7 @@ Mentara 在启动游戏时自动维护一个与原版游戏目录解耦的虚拟
     - 可在 `mentara.toml` 中通过 `[mix]`（全局或按 Profile 覆盖）配置 `decrypt = "layers" | "all" | "patched"`（默认 `"layers"` 自动解密所有叠层中的加密/防解包 `.mix` 及被补丁的底层 `.mix`）与可选 `mvmx_secret`。
 - **Linux 与 Windows 对称设计**：
   - `[linux]` 与 `[windows]` 采用完全一致的 `PlatformConfig` 结构（`backend`、`runtime_dir`、`state_dir`、`runner`），同一份 `mentara.toml` 与 Profile 可在双平台直接运行。
-  - **Linux**：默认使用 `fuse-overlayfs` 零复制联合挂载，自动通过 `.wh.` 白名单隐藏已消费的 `.patch.*` / `.patch.mix` 源文件以与 Windows 保持完全一致的虚拟目录视图，挂载点与状态层分别位于 `$XDG_CACHE_HOME/mentara/runtime` 与 `$XDG_STATE_HOME/mentara`。
+  - **Linux**：默认使用 `fuse-overlayfs` 零复制联合挂载，自动通过 `.wh.` 白名单隐藏已消费的补丁文件、补丁目录与 MIX 容器目录以与 Windows 保持完全一致的虚拟目录视图，挂载点与状态层分别位于 `$XDG_CACHE_HOME/mentara/runtime` 与 `$XDG_STATE_HOME/mentara`。
   - **Windows**：默认使用 `symlink` 影子目录树（无开发者模式权限时自动回退至同卷 NTFS 硬链接 `os.link`，`.ini`/`.cfg`/存档隔离复制并在退出时回写），直接原生启动目标 `.exe`，挂载点与状态层位于 `%LOCALAPPDATA%\mentara`。
 - **通用命令链解析与健康诊断 (`doctor`)**：Runner 与 `doctor` 通过 `--` 分隔符统一解析任意包装器链（如 `gamescope ... -- umu-run`），并校验基础目录、叠层目录、后端工具、目标可执行文件、大小写冲突以及全部文本补丁与 MIX 解密合成任务。
 

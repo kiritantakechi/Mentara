@@ -609,7 +609,7 @@ def test_nested_mix_container_patching_and_patch_mix(tmp_path: Path) -> None:
         "x",
         encoding="utf-8",
     )
-    with pytest.raises(OverlayError, match=r"invalid non-\.mix subdirectory"):
+    with pytest.raises(OverlayError, match=r"not_a_mix/ inside ra2md\.mix/ is not"):
         build_overlay_plan(
             (
                 LayerSource("base", base_dir, EntryOrigin.BASE),

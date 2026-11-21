@@ -146,7 +146,7 @@ def test_build_overlay_plan_composes_patches_across_layers_and_state(
         encoding="utf-8",
     )
     (layer_two / "RA2MO.patch.ini").write_text(
-        "[Options]\n!Difficulty\n[Video]\nScreenWidth=1920\n",
+        "[Options]\n-Difficulty\n[Video]\nScreenWidth=1920\n",
         encoding="utf-8",
     )
     # Runtime state modifies Volume; patches still apply on top.
@@ -206,14 +206,17 @@ def test_patch_directory_applies_fragments_in_name_order(tmp_path: Path) -> None
     assert Path("INI/rules.patch.ini") not in plan.directories
 
 
-@pytest.mark.parametrize("stray", ["notes.md", "sub/c.ini"])
+@pytest.mark.parametrize(
+    ("stray", "error"),
+    [("notes.md", r"holds only \*\.ini files"), ("sub/c.ini", r"holds only fragments")],
+)
 def test_patch_directory_rejects_files_that_are_not_fragments(
-    tmp_path: Path, stray: str
+    tmp_path: Path, stray: str, error: str
 ) -> None:
     layer = tmp_path / "layer"
     path = layer / "rules.patch.ini" / stray
     path.parent.mkdir(parents=True)
     path.write_text("[A]\nX=1\n", encoding="utf-8")
 
-    with pytest.raises(OverlayError, match=r"holds only \*\.ini files"):
+    with pytest.raises(OverlayError, match=error):
         build_overlay_plan((LayerSource("layer", layer, EntryOrigin.LAYER),))

@@ -792,7 +792,7 @@ def _mix_fingerprint(entry: FileEntry, *, context: MIXContext) -> str:
             case MIXPatchOp():
                 _hash_path_stat(
                     hasher,
-                    f"patch:{op.patch.kind.value}",
+                    f"patch:{op.patch.format.value}",
                     op.patch.source_path,
                 )
             case _:

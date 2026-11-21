@@ -388,65 +388,75 @@ profile may stop at any layer but never skips one (a contract test checks
   independent of the layers; retrying the room usually works. Joining
   someone else's LAN room is unaffected.
 
-## Text-Level Patching
+## Layer Layout
 
-Instead of copying an entire config or map file just to change a few entries,
-drop a patch file at the same relative path. A large patch may instead be a
-directory of the same name holding fragments with the patch's own extension
-(`expandmo99.mix/rulesmo.patch.ini/allied.ini`, `.../soviet.ini`); the
-fragments apply in name order as one patch, the directory never appears in
-the game folder, and any other file in it is an error:
+A layer mirrors the game directory (`src/mentara/layout.py` reads it). Every
+file either supplies the file at its own path or, through one of three kinds
+of structural names, changes something below it:
 
-### 1. `<stem>.patch.{ini,map,yrm,mpr,cfg,inj}` (Native Westwood INI / Map / KV Patch)
+| Name in a layer | Means |
+|---|---|
+| `<archive>.mix/` (directory) | MIX container: the files below are members of that archive; nested `<archive>.mix/` directories reach archives inside it |
+| `<name>.patch.<format>` | a patch of the file it names, written in `<format>` |
+| `<name>.patch.<format>/` (directory) | the same patch split into fragments `*.<format>`, applied in name order |
 
-Directly maps `<stem>.patch.<ext>` to `<stem>.<ext>`:
-- `*.patch.ini` -> `*.ini` (INI configs & rules, e.g. `Resources/ClientDefinitions.patch.ini` -> `Resources/ClientDefinitions.ini`)
-- `*.patch.map` -> `*.map` (Mental Omega campaign/challenge/skirmish maps, e.g. `MapsMO/Challenge/c_aberration.patch.map`)
-- `*.patch.yrm` / `*.patch.mpr` -> `*.yrm` / `*.mpr` (YR / RA2 custom maps)
-- `*.patch.cfg` -> `*.cfg` (flat key-value configs, e.g. `Resources/aqrit.patch.cfg`)
-- `*.patch.inj` -> `*.inj` (Syringe hook definitions, e.g. `Ares.dll.patch.inj`)
+The patch's extension is its format:
 
-For example, `overlays/phobos/Resources/ClientDefinitions.patch.ini`:
+| Format | Patches | Example |
+|---|---|---|
+| INI syntax: `ini`, `map`, `yrm`, `mpr`, `cfg`, `inj` | `<name>.<format>`, by section and key | `Resources/ClientDefinitions.patch.ini` |
+| `mix` | the archive `<name>.mix`, merging its entries by MIX ID | `expandmo99.patch.mix` |
+| `toml` | any text file `<name>`, by line edits | `MentalOmegaClient.exe.config.patch.toml` |
+
+Patches and containers compose in layer order on top of the file below, and
+the plan hides every patch, patch directory and container it consumes, so the
+game folder shows only the result. Inside a container only nested archives
+and patch directories may be subdirectories, and a patch directory holds only
+fragments in its format; anything else stops the plan with an error.
+
+### INI patches
 
 ```ini
-; Modify or add keys in [Settings]
-[Settings]
-GameExecutableNames=Syringe.exe
-GameLauncherExecutableName=
-ExtraCommandLineParams=gamemd.exe --args="-SPAWN -CD -SPEEDCONTROL -LOG -AFFINITY:1048575"
-
-; Remove a key with !Key or -Key
-!ForbiddenFiles
-
-; Auto-numbered Westwood list append (+=Value appends at max_index + 1)
+; Comments start with ';'.
+Root=1              ; above the first header: the root of sectionless files
+[Settings]          ; edit [Settings], creating it if absent
+Key=Value           ; set every Key line, or add one
+-Key                ; delete every Key line
 [Animations]
-+=NEW_PHOBOS_ANIM
-
-; Remove an entire section with [-SectionName]
-[-DeprecatedSection]
++=NEW_ANIM          ; add under the next free integer key
+[-Obsolete]         ; delete the section
 ```
 
-A section that appears more than once in the target file (MO's `aimo.ini`
-has several) is edited in every occurrence: `Key=Value` rewrites each `Key`
-line, `!Key` removes all of them, `+=Value` numbers past the highest index
-across all copies, and `[-Section]` deletes every copy. The result is the
-same whichever duplicate the engine reads, and `[-X]` followed by `[X]`
-replaces a duplicated definition with a single clean one.
+Each operation has one spelling: `+` adds, `-` removes. A section repeated
+in the target (MO's `aimo.ini` has several) is edited in every copy, so the
+result does not depend on which copy the engine reads; `[-X]` followed by
+`[X]` replaces a duplicated definition with one clean copy. Comments,
+spacing around `=` and CRLF line endings of the target are kept.
 
-### 2. `<target>.patch.toml` (Plaintext Line & Block Patch)
+### TOML patches
 
-Works on any plaintext file (`.cfg`, `.config`, `.txt`, `.ini`):
+An array of `[[edit]]` tables, applied in order. Every edit that looks for
+text names it `match`, and every edit that adds text names it `content`:
 
 ```toml
-[[text]]
-op = "replace"          # "replace" | "insert_after" | "insert_before" | "delete_lines" | "append" | "prepend"
-target = "Renderer=auto"
-replacement = "Renderer=opengl"
+[[edit]]
+op = "replace"          # every occurrence of match becomes content
+match = "Renderer=auto"
+content = "Renderer=opengl"
 
-[[text]]
-op = "insert_after"
-anchor = "[Video]"
+[[edit]]
+op = "insert_after"     # also insert_before: lines next to each match
+match = "[Video]"
 content = "; Managed by Mentara"
+
+[[edit]]
+op = "delete"           # every line containing match
+match = "Obsolete="
+required = false        # match ops fail when nothing matches, unless false
+
+[[edit]]
+op = "append"           # also prepend
+content = "; end"
 ```
 
 ## How Layering Works
@@ -478,12 +488,11 @@ formats (`S1:standard`, `S2:mvmx` MVLoader AES-256-GCM + zlib with automatic
   overlay layer are automatically decrypted into clean `S1:standard` archives
   (cached by content fingerprint in `runtime_dir/mix-cache`). Already-clean
   `S1:standard` archives and PE DLLs disguised as `.mix` stay zero-copy.
-- **`<stem>.patch.mix`**: merges entries from an overlay `.mix` (plain or
-  encrypted) onto the lower `<stem>.mix` by 32-bit MIX ID in strict layer order.
-- **`<archive>.mix/` directory**: patches text entries (`rulesmo.patch.ini`),
-  injects/replaces loose files (`extra.shp`), or descends into nested `.mix`
-  archives (`ra2md.mix/localmd.mix/rulesmd.patch.ini`,
-  `ra2md.mix/localmd.patch.mix`).
+- **MIX patches and containers** (see Layer Layout): `<stem>.patch.mix`
+  merges an overlay `.mix` (plain or encrypted) onto `<stem>.mix` by 32-bit
+  MIX ID, and an `<archive>.mix/` directory patches, adds or replaces members,
+  down through nested archives (`ra2md.mix/localmd.mix/rulesmd.patch.ini`,
+  `ra2md.mix/localmd.patch.mix`), in strict layer order.
 
 ## Typical Layer Contents
 

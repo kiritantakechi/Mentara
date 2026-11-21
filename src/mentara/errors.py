@@ -261,6 +261,19 @@ class OverlayError(MentaraError):
         return cls(f"Invalid overlay patch {path}: {detail}")
 
     @classmethod
+    def invalid_layout(cls, path: Path, detail: str) -> Self:
+        """Build an error when a layer path breaks the layout grammar.
+
+        Args:
+            path: Offending path relative to its layer root.
+            detail: Which structural rule the path breaks.
+
+        Returns:
+            An `OverlayError` describing the misplaced file.
+        """
+        return cls(f"Invalid overlay layout {path.as_posix()}: {detail}")
+
+    @classmethod
     def invalid_mix(cls, path: Path, detail: str) -> Self:
         """Build an error when a MIX archive cannot be decoded or built.
 
