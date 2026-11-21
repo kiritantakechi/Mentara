@@ -60,6 +60,27 @@ profile may stop at any layer but never skips one (a contract test checks
       countries build the Tesla Trooper `SHK`.
     - Two Soviet triggers (`SOVTRI197/199-G`) built the Allied-only
       Dustdevil and held a team slot until it dissolved; they are off.
+  - Side-wide triggers with a unit one country cannot build (fix 9):
+    each country is forbidden one of its side's units and builds its own
+    in that slot (`ForbiddenHouses` on one, `RequiredHouses` on the other,
+    same prerequisites and category; where a country has two, the one
+    firing the same weapons). 51 triggers raised the same team for all
+    three countries of a side, so in the forbidden country it never
+    filled and held a team slot until it dissolved: China's Borillos,
+    Russia's Tesla Troopers and Halftracks, Latin's Demolition Trucks,
+    PsiCorps' Adepts, Haihead's Raccoons, Last Bastion's Buzzards. MO had
+    already written its own country twin for many of them (`FOETR135LB-G`,
+    "Last Bastion - Condor Hunt", beside "Foehn - Buzzard Hunt"), but the
+    side-wide original still fired for that country too. Each such trigger
+    is switched off as in fix 8, and every country gets its own copy in
+    the form of MO's twins: its two-letter code before `-G`, its label in
+    the name in place of the side's, and in the forbidden country its own
+    unit in the team (`SOVTR181RU-G`, "Russia - Tigr APCs Defense 1",
+    raising "Russia Tigr APC Defense 1"). A country MO gave a twin keeps
+    only that twin. That makes 110 copies and 8 new teams; a skirmish
+    Russian AI raises "Russia Tigr APC Defense 1". Units no country builds
+    (Ravager, Ruiner, Aeroblaze in its long mode) are only delivered or
+    deployed, so the teams that ask for them are left as they are.
   - **`expandmo99.mix/rulesmo.patch.ini`**: the elite projectile of the
     Catastrophe, Centurion and Mammoth missiles kept vanilla's
     anti-air-only flag while every rookie form also hits the ground, so
@@ -430,9 +451,9 @@ profile may stop at any layer but never skips one (a contract test checks
       Sweepers deploy and Repair Drones guard on landing
       (`AIParadropMission`); every other vehicle the AI drops hunts,
       Phobos 0.5's fix of vanilla leaving them on Guard while its
-      paradropped infantry hunted. Quick Fort (an empty bunker without
-      bunker teams), Raven, Vision, Zephyr Beacon and Golden Wind stay
-      player-only. Risks the AI accepts: Repair Drones pile up at a
+      paradropped infantry hunted. Quick Fort (a bunker that MO's AI
+      mans only through rare one-unit bunker teams), Raven, Vision,
+      Zephyr Beacon and Golden Wind stay player-only. Risks the AI accepts: Repair Drones pile up at a
       base that is often attacked, and a Kingsnake nest hunts the
       attackers for its lifetime.
   - Rules in the fifth wave:
@@ -515,17 +536,25 @@ profile may stop at any layer but never skips one (a contract test checks
       time), naval mines (the map has no water) and Kingsnakes (US only).
     - Fifth wave: Hijackers the AI drops on a human base steal one of four
       parked tanks, which shells its old owner's Construction Yard, and
-      bomb the rest. A Quick Fort the AI drops when attacked stays empty
-      until it is destroyed, so it stays player-only. Over a Tick Trap
+      bomb the rest. Quick Forts the AI drops when attacked stay empty:
+      in three minutes it dropped three ($1500) while its bunker teams
+      put one Lasher into a built bunker, so Quick Fort stays
+      player-only (no Phobos trigger condition can tell an empty fort
+      from a manned one to send a team promptly). Over a Tick Trap
       tunnel's life the AI spawns 8 ticks under `enhance` and 6 under
       `default`. Confused Rhinos open fire where they stand. In `default`,
       a V3 missile now comes down on a Rhino driving past (under Phobos'
       cell aim it burst on ground the Rhino had left), and the Harrier's
-      armour mark still lands under Phobos, so it needs no rule. Not
-      played: the cloak and twin conversions and the Zorb lift (read in
-      Phobos' source), the base centre (Phobos' source and Ares'
-      targeting docs; the Disruptor scene never fired), and the miners'
-      area guard.
+      armour mark still lands under Phobos, so it needs no rule. With
+      four Grumbles deployed far from a small AI base, the AI's Instant
+      Shelter lands beside its Construction Yard under `enhance` and out
+      of the base under `default`. An AI Adept captures a player's Thor
+      and the AI logs it as its own copy ("Thor Gunship (AI)"); a
+      player's Adept turns an AI Thor into the player's Thor. Not
+      played: the cloak restore (a scene could not get passengers to
+      pick targets of their own; the hook reads the key as described),
+      the Zorb lift and the miners' area guard (read in Phobos'
+      source).
   - It changes gameplay, so online games need every player on `enhance`.
 
 ## Known Issues
@@ -625,8 +654,16 @@ is at most 24 characters, the length the engine keeps of a type's ID; Ares
 reports a longer one as a fatal error and the truncated type loses its
 section. Art IDs
 of new shapes are the shape's file stem in upper case (`PHRANKV` draws
-`phrankv.shp`), and new AI IDs follow MO's form with the prefix `MNT`
-(`MNTTF01-G`). A house list naming the owner and its allies is `team`.
+`phrankv.shp`). New AI IDs follow MO's form: a fresh one takes the prefix
+`MNT` and MO's kind (`MNTTF01-G` task force, `MNTSC01-G` script,
+`MNTTT01-G` team), and a country's copy of an MO entry adds the country's
+code before `-G`, as MO's own Last Bastion twins do (`FOETT135LB-G`). The
+codes are two letters from MO's country labels: US EU PA (USA, Euro,
+Pacific), RU LA CH (Russia, Latin, China), PC SC HQ (PsiCorps, Scorpion,
+HQ), HA CO LB (Haihead, Coronia, Last Bastion). Their names take the
+country's label where MO's name has the side's ("Last Bastion - Condor
+Hunt" for "Foehn - Buzzard Hunt"), and a task force is named by its
+members ("4 Condor"). A house list naming the owner and its allies is `team`.
 
 ## How Layering Works
 
