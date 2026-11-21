@@ -95,6 +95,11 @@ check: fmt-check lint typecheck test
 assets *args:
     uv run mentara assets {{ args }}
 
+# Generate the Mental AI into the profile's top layer (--check: only report).
+[group("dev")]
+mentalai profile="enhance" *args:
+    uv run mentara mentalai --profile {{ profile }} {{ args }}
+
 # Build wheel and sdist using uv_build.
 [group("dev")]
 build:

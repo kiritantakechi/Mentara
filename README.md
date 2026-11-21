@@ -79,6 +79,7 @@ just check      # fmt-check + ruff check + ty check + pytest
 just cov        # 带覆盖率运行测试
 just build      # 通过 uv_build 构建发布包
 just assets     # 由 assets/ 构建叠层中的生成文件；just assets --check 只检查是否过期
+just mentalai   # 由 enhance 的规则生成终结级 AI（overlays/enhance）；--check 只检查是否过期
 ```
 
 ## 目录结构

@@ -422,6 +422,117 @@ profile may stop at any layer but never skips one (a contract test checks
     projectile in its YR list (`ExtraWarheads` ignores unlisted ones).
   - **`expandmo99.mix/artmo.patch.ini`**: art for the rules (the timer
     anims below).
+  - **`expandmo99.mix/aimo.patch.ini/`** is a patch directory:
+    `rewrites.ini` rewrites a few of MO's own skirmish scripts (below);
+    `mentalai.ini` is the Mental AI's TaskForces, ScriptTypes and
+    TeamTypes, generated.
+  - **`INI/Game Options/Mental AI.patch.ini/`**: the Mental AI's
+    triggers, generated into the client's "Mental AI Boost" option.
+  - **Mental AI** ("终结级AI强化", MO's "Mental AI Boost" game option).
+    MO's option only made the AI faster and richer: shorter team delays,
+    factory cloning, start cash, a larger harvest bonus and more
+    factories, with MO's ordinary teams. Here the option also replaces
+    the AI's teams; MO's cheats stay. Unticked, the AI is MO's own with
+    the layers' fixes.
+    - The gate: the client merges the option file into the map, and
+      `[Basic] IgnoreGlobalAITriggers=yes` switches off every aimo.ini
+      trigger. The option file's own triggers are map triggers, so they
+      still run; each must be listed in `[AITriggerTypesEnable]`, or a
+      map trigger never forms. The TaskForces, ScriptTypes and TeamTypes
+      sit in aimo.ini under fresh IDs, where nothing refers to them in a
+      normal game. Redefining an MO TeamType from the map is avoided: a
+      probe that changed only its `Script=` lost the whole team.
+    - `mentara mentalai -p enhance` (`just mentalai`) generates both
+      fragments from the profile's rendered rules; `--check` reports
+      stale output. The generator (`src/mentara/mentalai/`) names no
+      unit: roles come from each unit's weapons against each armour
+      class (damage per second against infantry, vehicles, buildings and
+      aircraft), its hull and its flags (main battle tank, anti-infantry
+      screen, anti-air, artillery, siege, healer or repairer, detector,
+      hero, engineer, infiltrator). A country fields a unit if
+      `Owner`/`RequiredHouses`/`ForbiddenHouses` and its prerequisites
+      allow it from the buildings the country can own; a prerequisite
+      no house can build (MO's `AILOCK`) is skipped, because the AI does
+      not check unit prerequisites when it fills a team. A unit's tier
+      is the tech level of the building that unlocks it (up to 4, 5-7,
+      8 and up).
+    - Teams per country, each a set of role slots filled by the
+      best-scoring unit the country fields at that tier (at most six
+      member types): a combined-arms **line** at every tier (four front
+      tanks, an anti-infantry screen, anti-air, from tier 2 artillery,
+      a healer or repairer and a detector, at tier 3 a hero); a
+      **siege** group (artillery that out-damages buildings, with tanks,
+      screen and anti-air); fast **raids** on harvesters and
+      refineries; **air strikes** on the class the craft hurts most;
+      **base watch** teams; **engineers** for tech buildings; **spies**;
+      a **navy** once a shipyard stands; and an MCV when the yard is
+      lost. The AI skips unit prerequisites, so each trigger holds its
+      tier back: tier 1 runs until the country owns its tier-2 building
+      (the one that unlocks most of that tier), higher tiers once it
+      owns theirs.
+    - How they fight: lines and sieges regroup, stage outside the enemy
+      base (vanilla 53, under a Phobos 16001 timeout), fight there in
+      Phobos Area Guard (10100), where every member picks its own
+      target, then push with vanilla `0,q` on defences and structures,
+      which hands the team's focus only to members without a target.
+      Phobos attack lines are kept for single-role teams (raids, air,
+      agents): they give every member the leader's target each frame,
+      so a mixed team's anti-air and medics would chase a building.
+      `LeadershipRating` ranks the slots (front line 12, artillery 10,
+      hero 9, screen 8, anti-air 6, support 4), so a tank leads and
+      picks targets instead of a dog or a hero (MO rates heroes 99).
+      Attack teams are `Aggressive`. Engineers and spies with nothing to
+      enter wait in Area Guard and look again, so the trigger is not
+      rolled again at once.
+    - Not used, broken in Phobos v0.5-alpha2: 12000 (never waits),
+      10102 (never regroups), 18000, the "random" list attacks, and
+      10104's charge test.
+    - Played (four Mental AIs on Tea Moon Cake, `enhance`, the game's
+      log names every team it creates): with the option ticked only
+      Mental teams form; unticked, MO's own. A copy of the line script
+      that logs each stage showed USA's tier-2 lines conscripting 76
+      times, staging 75 times, clearing defences 37 times and
+      structures 33 times in seven minutes (the rest died on the way);
+      in one game Russia's base fell by minute seven. Fixed from play:
+      air strikes on Phobos attack lines found no target for Comanches
+      and looped every frame, so they use vanilla quarries as MO's air
+      teams do; engineers and spies with nothing to enter ended and were
+      raised again on every roll; airfield-bound strikes asked for more
+      craft than the pads hold, so the AI abandoned their production.
+      Not yet checked: whether `Aggressive` fights on the move, anti-air
+      under Area Guard, the navy (the test map has no water).
+    - Superweapons: the AI fires most superweapons on its own (Ares
+      `SW.AITargeting`), but one with `SW.AITargeting=IronCurtain` waits
+      for a team to request its `SW.Group` (Ares action 55) and fires on
+      that team. MO's teams made those requests, so the gate would have
+      silenced them; the generator reads them from the rules instead. A
+      country's lines and sieges cast every such group it can own at the
+      staging point, before the push (Iron Curtain, Irradiate,
+      Overcharge, Drakuv, Nuclear Path; Chronoboost, Glacial Screen;
+      Rage, the drugs, Illusion, Kinetic Barrier, Ruiner; Nanofiber,
+      Decoys, Spinblade, Megaarena), each under a 10-second timeout
+      because action 55 waits while one is almost charged. A group that
+      delivers only harvesters (Warp Miners) is cast by the base watch.
+      `SW.AllowAI=no` groups (Chronolift) are skipped. A country with a
+      Chronosphere the AI may use gets a **Chronosphere assault**: front
+      tanks, artillery and anti-air vehicles (the sphere moves a 3x3
+      area and kills the infantry it moves) whose trigger waits for "the
+      Chronosphere is charged"; vanilla action 57 jumps them next to the
+      enemy's factories with the sphere the phobos layer pins, where MO's
+      own assault used action 56 and skipped the jump. Airfield-bound
+      strike craft share one airfield's pads across the tiers and are
+      not cloned (Phobos `ForbidParallelAIQueues`, set in the option
+      file): Mental AI's cloning builds a copy per extra factory, a copy
+      of such a craft has no pad, and the AI abandoned its production
+      (39 Foxtrots in one game, none after).
+    - Superweapons played (same four AIs, nine minutes): Warp Miners
+      fired 26 times, Spinblade 24, Decoy Team 24, Nanofiber 21,
+      Chronoboost 21, Regen Drugs 7, Illusion 6, and USA's Chronosphere
+      assault formed 15 times with 14 sphere jumps; with the same AIs
+      and no casts none of these fired. Russia, at the first start
+      position, fell first in every four-AI game; in a Russia-Latin game
+      Drakuv fired 11 times, Irradiate 5, Overcharge 5 and the Iron
+      Curtain 3. Nuclear Path was not seen.
   - Rules in the first wave:
     - **aura**: 19 field emitters (Ultra Dome, Lightning Rod, Repair
       Crane, Iron Guard, Disruptor, Chimera Core, Haze Core, Magnetic
@@ -455,7 +566,8 @@ profile may stop at any layer but never skips one (a contract test checks
     - AI: capital ships may bombard land in range, patrols guard actively
       (Phobos action 10100), the capital-ship superweapon raid attacks,
       AI GIs, Guardian GIs and Snipers deploy to fire, and the AI's spare
-      power scales with its drain (`aimo.patch.ini`, `shared.ini`).
+      power scales with its drain (`aimo.patch.ini/rewrites.ini`,
+      `shared.ini`).
   - Rules in the second wave:
     - **timer**: objects whose lifetime was an anim damaging them and that
       nothing else can hurt (Elite Reserves, Kingsnake portal, vision
@@ -737,7 +849,13 @@ of new shapes are the shape's file stem in upper case (`PHRANKV` draws
 code before `-G`, as MO's own Last Bastion twins do (`FOETT135LB-G`). The
 codes are two letters from MO's country labels: US EU PA (USA, Euro,
 Pacific), RU LA CH (Russia, Latin, China), PC SC HQ (PsiCorps, Scorpion,
-HQ), HA CO LB (Haihead, Coronia, Last Bastion). Their names take the
+HQ), HA CO LB (Haihead, Coronia, Last Bastion). The generated Mental AI
+numbers its IDs by family and tier (`MNTTF102RU-G` is Russia's tier-2
+line, with team `MNTTT102RU-G` and trigger `MNTTR102RU-G`; 1xx line,
+2xx siege, 3xx raid, 4xx air, 5xx base watch, 6xx engineers, 7xx spy,
+800 MCV, 803 Chronosphere assault, 9xx navy), and its scripts by family
+(`MNTSC100-G`, 810 for the Chronosphere assault), with the country code
+when the script casts that country's superweapons (`MNTSC100RU-G`). Their names take the
 country's label where MO's name has the side's ("Last Bastion - Condor
 Hunt" for "Foehn - Buzzard Hunt"), and a task force is named by its
 members ("4 Condor"). A house list naming the owner and its allies is `team`.

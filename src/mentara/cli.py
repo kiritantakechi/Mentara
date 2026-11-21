@@ -22,6 +22,7 @@ from mentara.config import (
 )
 from mentara.doctor import run_doctor
 from mentara.errors import MentaraError
+from mentara.mentalai.generate import RULES_SOURCE, generate_mentalai
 from mentara.mix import MIXArchiveOp, MIXFileOp, MIXOp, MIXPatchOp
 from mentara.overlay import (
     MountedWorkspace,
@@ -170,6 +171,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only report outputs that are missing or out of date.",
     )
 
+    mentalai_parser = subparsers.add_parser(
+        "mentalai",
+        help="Generate the Mental AI into the profile's top layer.",
+    )
+    _add_profile_flags(mentalai_parser)
+    mentalai_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Only report generated files that are missing or out of date.",
+    )
+
     return parser
 
 
@@ -308,17 +320,33 @@ def _dispatch(
         case "doctor":
             profile = _resolve_from_args(config, config_dir, args)
             exit_code = _cmd_doctor(profile, stdout=stdout, stderr=stderr)
-        case "assets":
-            exit_code = _cmd_assets(
+        case "mentalai" | "assets":
+            exit_code = _dispatch_generator(
+                subcommand,
                 config,
-                config_dir=config_dir,
-                check=bool(args.check),
+                config_dir,
+                args,
                 stdout=stdout,
             )
         case _:
             stderr.write(f"error: unknown subcommand {subcommand!r}\n")
             exit_code = _EXIT_ERROR
     return exit_code
+
+
+def _dispatch_generator(
+    subcommand: str,
+    config: MentaraConfig,
+    config_dir: Path,
+    args: argparse.Namespace,
+    *,
+    stdout: TextIO,
+) -> int:
+    check = bool(args.check)
+    if subcommand == "mentalai":
+        profile = _resolve_from_args(config, config_dir, args)
+        return _cmd_mentalai(profile, check=check, stdout=stdout)
+    return _cmd_assets(config, config_dir=config_dir, check=check, stdout=stdout)
 
 
 def _resolve_from_args(
@@ -362,6 +390,36 @@ def _cmd_assets(
     )
     stdout.write(f"{len(sources)} asset(s), {len(written)} rebuilt\n")
     return 0
+
+
+def _cmd_mentalai(
+    profile: ResolvedProfile,
+    *,
+    check: bool,
+    stdout: TextIO,
+) -> int:
+    if not profile.layers:
+        stdout.write(f"profile {profile.name!r} has no layer to write into\n")
+        return _EXIT_ERROR
+    rules = render_virtual_text(plan_profile(profile), RULES_SOURCE)
+    layer = profile.layers[-1]
+    outputs = generate_mentalai(rules)
+    stale = []
+    for relative, text in outputs.items():
+        target = layer / relative
+        current = target.read_text(encoding="utf-8") if target.is_file() else None
+        if current == text:
+            continue
+        stale.append(target)
+        if not check:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+    verb = "stale" if check else "wrote"
+    stdout.writelines(
+        f"{verb}: {target.relative_to(profile.config_dir)}\n" for target in stale
+    )
+    stdout.write(f"{len(outputs)} file(s), {len(stale)} {verb}\n")
+    return _EXIT_ERROR if check and stale else _EXIT_OK
 
 
 def _cmd_profiles(
