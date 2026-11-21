@@ -87,7 +87,29 @@ profile may stop at any layer but never skips one (a contract test checks
     promotion took the ground attack away; it hits both. The skirmish
     AI's Cryocopter lacked the player version's `Chronoshift.Crushable=no`,
     so units chronoshifted onto it crushed it; it now resists like the
-    player's.
+    player's. Values MO meant to match that drifted apart (found by
+    comparing each family of related objects field by field):
+    - Refunds and bounties: MO prices them at Cost/2 and Cost/5 and gives
+      every construction yard 750 and 600. The Foehn yard had the two
+      swapped, the Soviet yard refunded a refinery's 300, the Gharial kept
+      an $800 unit's values at $2050, the Draco and Diverbee refunded less
+      than half, and the Roadrunner's no-attack mode cost 50 more.
+    - Rookie and elite weapons: the Gun Turret's two warheads were swapped
+      (promotion weakened it against vehicles), the elite Paladin missile
+      lost the rookie's scatter, the elite garrisoned Knightframe and the
+      elite Basilisk shell hit below their rookies, the Harpy's rookie
+      garrison bolt did 54 where its elite did 55, the elite Magnetron
+      lost the rookie's beam style, and the rookie Desolator and Eradicator
+      deploy beams set a colour only a rad eruption draws, which only their
+      elites had.
+    - Forms of one unit: the Lobber Speeder lost the Speeder's EMP
+      resistance, the Athena Cannon showed on radar in hold-fire mode, the
+      Bulldog had 5 more HP as a Painter, two AI copies dropped their
+      originals' special threat, and the AI Zephyr had 10 HP less.
+    - The Tech Military Docks never promoted the Angelshark, the campaign
+      AI's Allied shipyard repaired nothing, the campaign Ion Storm spelt
+      `Lightning.Separation` "Seperation", and the Mental Omega Device
+      named a select voice soundmo never defines.
   - **`MentaraFixes.dll`** (Syringe hook DLL written in Zig, built from
     `assets/base/MentaraFixes.dll/` by `just assets`; Syringe injects it
     next to Ares. Its safety checks stay on and trap, so a hook that finds
@@ -134,6 +156,33 @@ profile may stop at any layer but never skips one (a contract test checks
     palette that no MO archive ships (all 41 other custom palettes ship every
     theater variant). The engine already falls back to the theater palette,
     so the dangling `Palette=cargo` is dropped without changing their look.
+    Keys YR reads under another name: the Foehn barracks' add-on sort
+    (`PowerUp1YSort`, not `PowerUp1AnimYSort`), the Warpnode's, Warpshop's
+    and Underground Lab's anim sorts (`ActiveAnim[Two|Three]YSort`), and the
+    unnumbered `AddOccupy`/`RemoveOccupy` lines (YR reads numbered ones
+    only) on two launch pads and two map props. Future Tank laser hits name
+    `Explosion1`, which soundmo spells `Explosion01`. (A misspelt damaged
+    upgrade key, `PowerUp1AnimDamaged`, needs no fix: an upgrade placed on
+    a damaged host shows anyway, checked with a Psychplug on a 16% Pandora
+    Hub.)
+  - **`expandmo99.mix/soundmo.patch.ini`**: every game logged 281 samples
+    no audio bag holds. Ten were typos of a sample that ships unused
+    (Deviator, Dustdevil, Fury Drone, Grumble, Plague Splatter,
+    Dybbuk-Evolver, Ramwagon, Saboteur voices); seven voice lists named a
+    take MO never recorded, so a share of their picks was silent (half the
+    Whipray's select clicks); 48 entries nothing plays held only missing
+    samples (voice sets of cut units) and are emptied but kept, since maps
+    play sounds by index. The Future Tank turret names an entry soundmo
+    never defined, now made from its unused `vftrot*` samples; maps' short
+    names for the beacon, Chrono Miner and warning sounds get aliases; two
+    Draco turret entries and the MAD Mine slam spelt `FShift` and `Priority`
+    wrong. The log now shows 59, the entries MO shipped no audio for.
+  - **`expandmo99.mix/evamo.patch.ini`**: 22 campaign and co-op
+    mission-fail triggers play `EVA_CriticalStrucureLost`, and three maps
+    other misspelt or cut-off EVA names, so EVA stayed silent; each gets an
+    alias of the line it means. Epsilon had no "Paratroopers ready"
+    recording (YR's Yuri side had none); its "Reinforcements ready" stands
+    in.
   - **`expandmo99.mix/uimd.patch.ini`**: `[UISettings] CampaignButton=show` is
     not an Ares value (`default|disable|hide|message|credits|sneakpeek`) and
     logged "Unrecognized UI action value" on every start; it is `default`.
