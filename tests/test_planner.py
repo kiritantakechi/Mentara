@@ -175,3 +175,45 @@ def test_build_overlay_plan_composes_patches_across_layers_and_state(
     assert "Difficulty" not in rendered
     assert "ClientVolume=8\r\n" in rendered
     assert "[Video]\r\nScreenWidth=1920\r\n" in rendered
+
+
+def test_patch_directory_applies_fragments_in_name_order(tmp_path: Path) -> None:
+    base, layer = tmp_path / "base", tmp_path / "layer"
+    fragments = layer / "INI" / "rules.patch.ini"
+    fragments.mkdir(parents=True)
+    (base / "INI").mkdir(parents=True)
+    (base / "INI" / "rules.ini").write_text("[A]\r\nX=0\r\n", encoding="utf-8")
+    (fragments / "b.ini").write_text("[A]\nX=2\n[List]\n+=Second\n", encoding="utf-8")
+    (fragments / "a.ini").write_text(
+        "[A]\nX=1\nY=1\n[List]\n+=First\n", encoding="utf-8"
+    )
+
+    plan = build_overlay_plan(
+        (
+            LayerSource("base", base, EntryOrigin.BASE),
+            LayerSource("layer", layer, EntryOrigin.LAYER),
+        ),
+    )
+
+    entry = plan.lookup_case_insensitive(Path("INI/rules.ini"))
+    assert entry is not None
+    assert [spec.source_path.name for spec in entry.patches] == ["a.ini", "b.ini"]
+    rendered = render_entry_text(entry)
+    assert "X=2\r\nY=1\r\n" in rendered
+    assert "0=First\r\n1=Second\r\n" in rendered
+    # The directory is consumed whole, not shown in the workspace.
+    assert Path("INI/rules.patch.ini") in plan.hidden_paths
+    assert Path("INI/rules.patch.ini") not in plan.directories
+
+
+@pytest.mark.parametrize("stray", ["notes.md", "sub/c.ini"])
+def test_patch_directory_rejects_files_that_are_not_fragments(
+    tmp_path: Path, stray: str
+) -> None:
+    layer = tmp_path / "layer"
+    path = layer / "rules.patch.ini" / stray
+    path.parent.mkdir(parents=True)
+    path.write_text("[A]\nX=1\n", encoding="utf-8")
+
+    with pytest.raises(OverlayError, match=r"holds only \*\.ini files"):
+        build_overlay_plan((LayerSource("layer", layer, EntryOrigin.LAYER),))

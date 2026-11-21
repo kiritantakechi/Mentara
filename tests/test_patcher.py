@@ -50,6 +50,21 @@ def test_parse_patch_target_recognizes_ini_family_and_toml_suffixes() -> None:
     )
 
 
+def test_parse_patch_target_maps_fragments_to_their_directory_target() -> None:
+    assert parse_patch_target(Path("mix/rules.patch.ini/allied.ini")) == (
+        Path("mix/rules.ini"),
+        PatchKind.INI,
+    )
+    assert parse_patch_target(Path("a.cfg.patch.toml/b.TOML")) == (
+        Path("a.cfg"),
+        PatchKind.TOML,
+    )
+    # Only files ending in the patch's own extension are fragments.
+    assert parse_patch_target(Path("rules.patch.ini/notes.md")) is None
+    assert parse_patch_target(Path("rules.patch.ini/.ini")) is None
+    assert parse_patch_target(Path("rules.patch.ini/a.patch.toml")) is None
+
+
 def test_sectionless_cfg_and_inj_patches_preserve_alignment() -> None:
     base_cfg = (
         ";;; www.bitpatch.com ;;;\r\n"

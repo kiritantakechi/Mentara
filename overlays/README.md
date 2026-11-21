@@ -249,7 +249,11 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
 ## Text-Level Patching
 
 Instead of copying an entire config or map file just to change a few entries,
-drop a patch file at the same relative path:
+drop a patch file at the same relative path. A large patch may instead be a
+directory of the same name holding fragments with the patch's own extension
+(`expandmo99.mix/rulesmo.patch.ini/allied.ini`, `.../soviet.ini`); the
+fragments apply in name order as one patch, the directory never appears in
+the game folder, and any other file in it is an error:
 
 ### 1. `<stem>.patch.{ini,map,yrm,mpr,cfg,inj}` (Native Westwood INI / Map / KV Patch)
 

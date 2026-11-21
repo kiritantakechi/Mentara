@@ -198,14 +198,28 @@ def parse_patch_target(relative_path: Path) -> tuple[Path, PatchKind] | None:
       `cfg`, `inj`).
     - `<target>.patch.toml` -> `<target>` (`PatchKind.TOML`) for general
       plaintext files.
+    - A fragment of a patch directory: a directory named like a patch
+      holds that patch split across files ending in its own extension
+      (`*.ini` in `rules.patch.ini/`, `*.toml` in `a.cfg.patch.toml/`).
+      Every fragment targets the directory's target; the planner applies
+      them in name order.
 
     Args:
         relative_path: Relative path scanned inside an overlay layer.
 
     Returns:
         `(target_relative_path, PatchKind)` if `relative_path` is a
-        patch file, otherwise `None`.
+        patch file or fragment, otherwise `None`.
     """
+    parent = relative_path.parent
+    directory = _parse_patch_name(parent) if parent.name else None
+    if directory is None:
+        return _parse_patch_name(relative_path)
+    name, extension = relative_path.name.casefold(), parent.suffix.casefold()
+    return directory if name.endswith(extension) and name != extension else None
+
+
+def _parse_patch_name(relative_path: Path) -> tuple[Path, PatchKind] | None:
     name = relative_path.name
     name_folded = name.casefold()
 

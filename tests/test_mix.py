@@ -773,3 +773,30 @@ def test_mix_crypto_concurrent_decryption_preserves_invariants() -> None:
         results = list(pool.map(_verify_worker, ciphertexts))
 
     assert all(results)
+
+
+def test_patch_directory_inside_mix_container_composes_fragments(
+    tmp_path: Path,
+) -> None:
+    base_dir, layer = tmp_path / "base", tmp_path / "layer"
+    base_dir.mkdir()
+    fragments = layer / "expandmo99.mix" / "rulesmo.patch.ini"
+    fragments.mkdir(parents=True)
+    (base_dir / "expandmo99.mix").write_bytes(
+        _pack_standard_mix({"rulesmo.ini": b"[General]\r\nVal=1\r\n"})
+    )
+    (fragments / "allied.ini").write_text("[E1]\nCost=1\n", encoding="utf-8")
+    (fragments / "shared.ini").write_text("[General]\nVal=2\n", encoding="utf-8")
+    sources = (
+        LayerSource("base", base_dir, EntryOrigin.BASE),
+        LayerSource("layer", layer, EntryOrigin.LAYER),
+    )
+
+    rendered = render_virtual_text(
+        build_overlay_plan(sources), Path("expandmo99.mix/rulesmo.ini")
+    )
+
+    assert rendered == "[General]\r\nVal=2\r\n\r\n[E1]\r\nCost=1\r\n"
+    (fragments / "notes.md").write_text("x", encoding="utf-8")
+    with pytest.raises(OverlayError, match=r"holds only \*\.ini files"):
+        build_overlay_plan(sources)

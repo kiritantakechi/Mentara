@@ -531,8 +531,9 @@ def _scan_source(
         )
         for dirname in dirnames:
             candidate_dir = Path(dirname) if is_top_level else relative_dir / dirname
-            if source.origin is EntryOrigin.LAYER and _is_or_inside_mix_dir(
-                candidate_dir
+            if source.origin is EntryOrigin.LAYER and (
+                _is_or_inside_mix_dir(candidate_dir)
+                or _is_or_inside_patch_dir(candidate_dir)
             ):
                 continue
             accumulator.directories.add(candidate_dir)
@@ -562,6 +563,28 @@ def _is_or_inside_mix_dir(relative_dir: Path) -> bool:
     return any(_is_mix_segment(part) for part in relative_dir.parts)
 
 
+def _is_or_inside_patch_dir(relative_dir: Path) -> bool:
+    return any(
+        parse_patch_target(Path(part)) is not None for part in relative_dir.parts
+    )
+
+
+def _check_patch_fragment(relative_file: Path, full_path: Path) -> None:
+    # A patch directory is consumed whole: everything in it must be a
+    # fragment, directly inside it.
+    holders = [
+        Path(*relative_file.parts[: index + 1])
+        for index, part in enumerate(relative_file.parts[:-1])
+        if parse_patch_target(Path(part)) is not None
+    ]
+    if not holders:
+        return
+    if holders == [relative_file.parent] and parse_patch_target(relative_file):
+        return
+    detail = f"patch directory {holders[0].name} holds only *{holders[0].suffix} files"
+    raise OverlayError.invalid_patch(full_path, detail)
+
+
 def _dispatch_scanned_file(
     *,
     relative_file: Path,
@@ -570,6 +593,7 @@ def _dispatch_scanned_file(
     accumulator: _PlanAccumulator,
 ) -> None:
     if source.origin is EntryOrigin.LAYER:
+        _check_patch_fragment(relative_file, full_path)
         mix_container = _split_mix_container_path(relative_file)
         if mix_container is not None:
             mix_relative, inner_relative = mix_container
@@ -596,7 +620,12 @@ def _dispatch_scanned_file(
         patch_target = parse_patch_target(relative_file)
         if patch_target is not None:
             target_relative, patch_kind = patch_target
-            accumulator.hidden_paths.add(relative_file)
+            # A fragment hides its whole patch directory.
+            accumulator.hidden_paths.add(
+                relative_file.parent
+                if _is_or_inside_patch_dir(relative_file.parent)
+                else relative_file
+            )
             _record_patch_entry(
                 target_relative=target_relative,
                 spec=PatchSpec(
@@ -624,7 +653,12 @@ def _record_mix_container_member(
     layer_label: str,
     accumulator: _PlanAccumulator,
 ) -> None:
-    nested_parents = inner_relative.parts[:-1]
+    inner_text_patch = parse_patch_target(inner_relative)
+    nested_parents = (
+        inner_text_patch[0].parent.parts
+        if inner_text_patch is not None
+        else inner_relative.parts[:-1]
+    )
     for parent_segment in nested_parents:
         if not _is_mix_segment(parent_segment):
             detail = (
@@ -638,9 +672,7 @@ def _record_mix_container_member(
         accumulator.hidden_paths.add(mix_relative)
 
     leaf_name = inner_relative.parts[-1]
-    leaf_path = Path(leaf_name)
-    nested_mix_patch = _parse_mix_patch_archive(leaf_path)
-    inner_text_patch = parse_patch_target(leaf_path)
+    nested_mix_patch = _parse_mix_patch_archive(Path(leaf_name))
 
     if nested_mix_patch is not None:
         new_op: MIXOp = MIXArchiveOp(
@@ -651,7 +683,7 @@ def _record_mix_container_member(
     elif inner_text_patch is not None:
         inner_target, patch_kind = inner_text_patch
         new_op = MIXPatchOp(
-            target_path=(*nested_parents, inner_target.name),
+            target_path=inner_target.parts,
             patch=PatchSpec(
                 kind=patch_kind,
                 source_path=full_path,
