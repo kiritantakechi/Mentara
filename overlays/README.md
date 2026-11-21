@@ -205,6 +205,18 @@ profile may stop at any layer but never skips one (a contract test checks
       `AIChronoSphereSW`/`AIChronoWarpSW` name MO's pair.
     - Artillery fired up or down a slope aims with the height included
       (`Arcing.AllowElevationInaccuracy=false`).
+    - Cloaked open-topped transports: Ares 3.0 made a cloaked hull
+      uncloak when its passengers fire. Phobos replaced that hook with
+      `OpenTopped.DecloakToFire`, which its source defaults off (its docs
+      say on), so passengers fired from an invisible Battle Tortoise,
+      Centurion, Catastrophe or Jackal in a Haze Core or Hazequad field or
+      under Shadow Ring. The layer turns it on. The Nautilus and the
+      Magnetic emitter opt out: their built-in magnet gunners fire without
+      uncloaking, so the hull stays hidden while its field pulses.
+    - Spawned missiles (V3, V2, Dreadnought, Akula, Respite, Topol) fly
+      to their target again (`MissileSpawnAttackCell=false`). Phobos sent
+      them to the cell under it, which moved the blast off infantry's
+      sub-cells and onto ground a moving unit had left.
   - **`expandmo50.mix/`**: a new `EXPANDMO%02d.MIX` archive for Phobos-only
     files. It must be an expansion archive: the engine parses CSF tables and
     rules right after the `EXPANDMO` archives load and finds `ECACHE*`/
@@ -254,7 +266,9 @@ profile may stop at any layer but never skips one (a contract test checks
       blitter/lighting/targeting fixes, one share of height lighting for aircraft
       and jumpjets alike, floating income, shadows and wakes,
       combat alerts (unit voices only; MO has no `EVA_UnitsInCombat`), low box
-      selection priority for all 10 harvesters, low deploy priority for the
+      selection priority for all 10 harvesters, area guard for the 2 armed
+      ones (War Miner, Ultra Miner; players' only, so the AI's keep
+      mining), low deploy priority for the
       84 vehicles whose Deploy does something (unpack, mode toggle, land,
       unload or a deploy ability, such as the Demolition Truck's blast), so
       Deploy on a mixed selection only digs in its infantry, attack-move
@@ -417,10 +431,38 @@ profile may stop at any layer but never skips one (a contract test checks
       (`AIParadropMission`); every other vehicle the AI drops hunts,
       Phobos 0.5's fix of vanilla leaving them on Guard while its
       paradropped infantry hunted. Quick Fort (an empty bunker without
-      bunker teams), the Hijackers, Raven, Vision, Zephyr Beacon and
-      Golden Wind stay player-only. Risks the AI accepts: Repair Drones pile up at a
+      bunker teams), Raven, Vision, Zephyr Beacon and Golden Wind stay
+      player-only. Risks the AI accepts: Repair Drones pile up at a
       base that is often attacked, and a Kingsnake nest hunts the
       attackers for its lifetime.
+  - Rules in the fifth wave:
+    - **base-centre**: 30 buildings placed out in the field, 21 that a
+      superweapon drops (beacons, towers, shelters, minefields) and 9
+      posts that support vehicles unpack into (Grumble, SODAR, Orcinus,
+      Sweeper, Boidmachine and the like), no longer count towards their
+      owner's base centre (`IgnoreForBaseCenter`). That point is where
+      the AI's base-aimed superweapons land and where enemy paradrops
+      aim, and each field building pulled it toward the front by its cost
+      (4 Grumbles 60 cells out moved it about 12 cells). Yards,
+      factories, refineries and anything a yard can build still count.
+    - **confusion**: a berserked unit attacks what is in its weapon's
+      reach instead of going on Hunt (`BerzerkMission=Guard`), which
+      could send it across the map, firing at nothing, for the whole
+      effect (Irritator, Deviant, Whipray, Shark, Confusion Grid, Chaos
+      Touch).
+    - **ai-superweapon**: the AI drops Hijackers on the favourite enemy's
+      base (as Tank Drop); they hunt, stealing or bombing the vehicles
+      they find. The AI also looks at its superweapons every 30 frames
+      instead of every 106-112 (`AISuperWeaponDelay`), so its Tick Trap
+      tunnels and Knightfall beacons spawn at a player's rate and its
+      defensive drops answer an attack within 2 seconds.
+    - **ai-twin**: the 8 AI-only copies (Thor, Zephyr, Vulture, Chrono
+      Legionnaire, Clairvoyant, Cryocopter, Morales, MAD Tank) become the
+      player's version when a player captures one, with its deploy
+      abilities and weapons, and a player's unit the AI captures becomes
+      the AI's copy (`Convert.ComputerToHuman`/`HumanToComputer`). Deploy
+      modes MO also locks to the AI are not copies and keep their type.
+    - **jammer** also covers a hull a Zorb's tractor beam holds aloft.
   - Checked in game (skirmish scenes; superweapons charged by a test-only
     probe layer stacked on `enhance`):
     - The aura buildings fire with no target (buffs, cloaking, repair 293
@@ -471,6 +513,19 @@ profile may stop at any layer but never skips one (a contract test checks
       Not seen: the Sweepers deploying (Phobos' own auto-deploy uses the
       same Unload mission), the Decoy Squadron (its team did not form in
       time), naval mines (the map has no water) and Kingsnakes (US only).
+    - Fifth wave: Hijackers the AI drops on a human base steal one of four
+      parked tanks, which shells its old owner's Construction Yard, and
+      bomb the rest. A Quick Fort the AI drops when attacked stays empty
+      until it is destroyed, so it stays player-only. Over a Tick Trap
+      tunnel's life the AI spawns 8 ticks under `enhance` and 6 under
+      `default`. Confused Rhinos open fire where they stand. In `default`,
+      a V3 missile now comes down on a Rhino driving past (under Phobos'
+      cell aim it burst on ground the Rhino had left), and the Harrier's
+      armour mark still lands under Phobos, so it needs no rule. Not
+      played: the cloak and twin conversions and the Zorb lift (read in
+      Phobos' source), the base centre (Phobos' source and Ares'
+      targeting docs; the Disruptor scene never fired), and the miners'
+      area guard.
   - It changes gameplay, so online games need every player on `enhance`.
 
 ## Known Issues
