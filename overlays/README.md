@@ -166,6 +166,37 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
       `rulesmo.patch.ini`, one section per object, with the rule behind
       each key in the block header; a contract test keeps every patch
       from updating one section in two places.
+    - Decoys: the hover number would tell a decoy (`FakeOf`: fake
+      Dominator, Foehn decoy squads, Libra clones and the like, 11
+      pairs) from the real thing by its lower health, so decoys and every
+      type that looks like the one they imitate show it to their own
+      team only (`Phobos*HealthTeam`).
+  - **MO under the Phobos engine**: Phobos fixes vanilla behaviour that
+    MO's numbers were tuned on, and the fixes it brings are always on.
+    Where that changed a unit's role or numbers, the layer puts MO's
+    back:
+    - Guardian GI: vanilla always fired Secondary at aircraft; Phobos
+      can fire Primary too and, both using one warhead, picked the slower
+      launcher (-30% anti-air, -1 range). `ForceAAWeapon` restores it.
+      (Wolfhound, Norio and Kingsnake now fire their anti-air missiles
+      at aircraft, which vanilla's rule prevented and their warheads
+      were written for.)
+    - Whipray: gattling units now fall back to their anti-air slot when
+      the ground slot is a dummy, so the anti-air ship shelled the shore;
+      `LandTargeting=1` keeps it on aircraft.
+    - Strafing runs (Venom, Toxic Strike, Dustdevil, smoke and B-52
+      bombers): Phobos repeats `Burst` on every shot of a run, 10
+      projectiles instead of MO's 6; the runs fire 6 single shots on
+      alternating barrels.
+    - Salvo delays MO wrote but the engine never read (vehicles read
+      only `BurstDelay0-3`, buildings none) now apply through
+      `Burst.Delays`, with ROF raised so damage per second stays MO's:
+      Buratino, Irritator, Sweeper, War Rig, Wormqueen.
+    - The Allied AI's Chronosphere assault (24 teams) checked one
+      superweapon and fired another it never owns, so it never jumped;
+      `AIChronoSphereSW`/`AIChronoWarpSW` name MO's pair.
+    - Artillery fired up or down a slope aims with the height included
+      (`Arcing.AllowElevationInaccuracy=false`).
   - **`expandmo50.mix/`**: a new `EXPANDMO%02d.MIX` archive for Phobos-only
     files. It must be an expansion archive: the engine parses CSF tables and
     rules right after the `EXPANDMO` archives load and finds `ECACHE*`/
