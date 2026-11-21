@@ -48,7 +48,7 @@ default_profile = "default"
 backend = "fuse-overlayfs"
 
 [linux.runner]
-command = ["gamescope", "-W", "2560", "-H", "1440", "-w", "1920", "-h", "1080", "-f", "--", "umu-run"]
+command = ["gamescope", "-W", "2560", "-H", "1440", "-w", "1920", "-h", "1080", "-F", "fsr", "-f", "--", "umu-run"]
 executable = "MentalOmegaClient.exe"
 env = { WINEDLLOVERRIDES = "ddraw=n,b" }
 
