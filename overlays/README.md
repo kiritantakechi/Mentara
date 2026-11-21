@@ -63,7 +63,10 @@ profile may stop at any layer but never skips one (a contract test checks
   - **`expandmo99.mix/rulesmo.patch.ini`**: the elite projectile of the
     Catastrophe, Centurion and Mammoth missiles kept vanilla's
     anti-air-only flag while every rookie form also hits the ground, so
-    promotion took the ground attack away; it hits both.
+    promotion took the ground attack away; it hits both. The skirmish
+    AI's Cryocopter lacked the player version's `Chronoshift.Crushable=no`,
+    so units chronoshifted onto it crushed it; it now resists like the
+    player's.
   - **`MentaraFixes.dll`** (Syringe hook DLL built from
     `assets/base/MentaraFixes.dll/` by `just assets`; Syringe injects it
     next to Ares): campaigns crashed under
