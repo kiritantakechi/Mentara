@@ -23,6 +23,12 @@ comptime {
         7,
         skipMissingStartWaypoint,
     );
+    syringe.hook(
+        0x00730B9C,
+        "DeployCommand_FirstPass_SkipNonDeployers",
+        7,
+        skipNonDeployers,
+    );
 }
 
 // --- The game's memory ---------------------------------------------------
@@ -98,4 +104,148 @@ fn skipMissingStartWaypoint(registers: *Registers) u32 {
     if (start < 0) return preset_start_next_house;
     if (start >= waypoints) return preset_start_next_house;
     return syringe.resume_original;
+}
+
+// --- Deploy on a selection is its own inverse ----------------------------
+
+/// The game's INI reader (CCINIClass), opaque here.
+const Ini = opaque {};
+const thiscall: std.lang.CallingConvention = .{ .x86_thiscall = .{} };
+const ReadBool = *const fn (
+    ini: *Ini,
+    section: [*:0]const u8,
+    key: [*:0]const u8,
+    fallback: u8,
+) callconv(thiscall) u8;
+const ReadString = *const fn (
+    ini: *Ini,
+    section: [*:0]const u8,
+    key: [*:0]const u8,
+    fallback: [*:0]const u8,
+    buffer: [*]u8,
+    buffer_size: u32,
+) callconv(thiscall) i32;
+const WhatAmI = *const fn (object: *const anyopaque) callconv(thiscall) i32;
+
+const rules_ini_address = 0x00887048; // CCINIClass::INI_Rules
+const read_bool: ReadBool = @ptrFromInt(0x005295F0); // INIClass::ReadBool
+const read_string: ReadString = @ptrFromInt(0x00528A10); // INIClass::ReadString
+
+/// ObjectClass::CurrentObjects, a DynamicVectorClass<ObjectClass *>.
+const selected_items_address = 0x00A8ECBC;
+const selected_count_address = 0x00A8ECC8;
+/// Far above any selection the game can make; more means a corrupt vector.
+const selected_objects_max = 0x10000;
+
+/// AbstractClass::WhatAmI is the 12th entry of every object's vtable.
+const what_am_i_slot = 0x2C / 4;
+const abstract_flags_offset_bytes = 0x14;
+const abstract_flag_techno: u32 = 0x1;
+const type_id_offset_bytes = 0x24; // AbstractTypeClass::ID
+/// A type ID is at most 24 characters, the length the engine keeps.
+const type_id_size_max = 25;
+
+const What = enum(i32) {
+    unit = 1,
+    aircraft = 2,
+    building = 6,
+    infantry = 15,
+    _,
+};
+
+/// Where the first pass moves on to the next selected object.
+const deploy_first_pass_next = 0x00730C10;
+
+/// Whether the selection holds a techno without LowDeployPriority, worked
+/// out once per command, at the first pass's first object. The game runs
+/// its commands on one thread.
+var selection_has_normal_priority = false;
+
+/// Deploy on a selection (DeployCommandClass::Execute) first looks at every
+/// selected deployer, infantry that can deploy and units with
+/// IsSimpleDeployer: if some are deployed and some are not, the second pass
+/// sends Deploy only to those that are not, so the group ends up deployed;
+/// otherwise every one toggles. Two kinds of unit sit in that first look
+/// without taking part, and each stops a second Deploy from undoing the
+/// first:
+/// - A unit whose Deploy converts it into another type (Ares
+///   Convert.Deploy: the mode toggles) comes out as a fresh, undeployed
+///   unit, so it always counts as not deployed. Deploy on GIs and Bulldogs
+///   digs the GIs in; the next sees "GIs deployed, a Bulldog not", leaves
+///   the GIs dug in and toggles the Bulldogs back.
+/// - A unit Phobos leaves out of the command (LowDeployPriority, while a
+///   unit without it is selected) still counts as not deployed, so the next
+///   Deploy leaves the dug-in GIs alone and skips it too: nothing happens.
+/// Leave both out of the first look, so it judges only units that keep a
+/// deployed state and receive the command. Both settings are read from the
+/// rules INI, which stays loaded for the whole game. At 0x00730B9C the
+/// first pass holds the object in ESI and its index in EDI.
+fn skipNonDeployers(registers: *Registers) u32 {
+    const rules = global(?*Ini, rules_ini_address).* orelse return syringe.resume_original;
+    const object: *const anyopaque = @ptrFromInt(registers.esi);
+    const selected_count = global(i32, selected_count_address).*;
+    assert(selected_count > 0);
+    assert(selected_count <= selected_objects_max);
+    assert(registers.edi < @as(u32, @intCast(selected_count)));
+    if (registers.edi == 0) {
+        selection_has_normal_priority = selectionHasNormalPriority(rules, selected_count);
+    }
+    const what = whatAmI(object);
+    const type_id = technoTypeId(object, what) orelse return syringe.resume_original;
+    // Phobos skips a low-priority unit only beside one without the flag;
+    // alone, a unit with it has no such neighbour, so this needs no count.
+    if (selection_has_normal_priority) {
+        if (lowDeployPriority(rules, type_id)) return deploy_first_pass_next;
+    }
+    if (what == .unit) {
+        if (convertsOnDeploy(rules, type_id)) return deploy_first_pass_next;
+    }
+    return syringe.resume_original;
+}
+
+fn selectionHasNormalPriority(rules: *Ini, selected_count: i32) bool {
+    assert(selected_count > 0);
+    assert(selected_count <= selected_objects_max);
+    const items = global([*]const ?*const anyopaque, selected_items_address).*;
+    for (items[0..@intCast(selected_count)]) |maybe_object| {
+        const object = maybe_object orelse continue;
+        if (field(u32, object, abstract_flags_offset_bytes) & abstract_flag_techno == 0) continue;
+        const type_id = technoTypeId(object, whatAmI(object)) orelse continue;
+        if (!lowDeployPriority(rules, type_id)) return true;
+    }
+    return false;
+}
+
+fn whatAmI(object: *const anyopaque) What {
+    const vtable = field([*]const WhatAmI, object, 0);
+    return @fromBackingInt(vtable[what_am_i_slot](object));
+}
+
+/// The ID of a selected techno's type: Unit and Aircraft keep the type at
+/// 0x6C4, Infantry at 0x6C0, Building at 0x520; any other object has none.
+fn technoTypeId(object: *const anyopaque, what: What) ?[*:0]const u8 {
+    const type_object = switch (what) {
+        .unit, .aircraft => field(?*const anyopaque, object, 0x6C4),
+        .infantry => field(?*const anyopaque, object, 0x6C0),
+        .building => field(?*const anyopaque, object, 0x520),
+        _ => return null,
+    } orelse return null;
+    const id: [*:0]const u8 = @ptrCast(@as([*]const u8, @ptrCast(type_object)) +
+        type_id_offset_bytes);
+    assert(id[0] != 0);
+    return id;
+}
+
+fn lowDeployPriority(rules: *Ini, type_id: [*:0]const u8) bool {
+    return read_bool(rules, type_id, "LowDeployPriority", 0) != 0;
+}
+
+fn convertsOnDeploy(rules: *Ini, type_id: [*:0]const u8) bool {
+    var value: [type_id_size_max]u8 = undefined;
+    const length = read_string(rules, type_id, "Convert.Deploy", "", &value, value.len);
+    assert(length >= 0);
+    assert(length < value.len);
+    const converts_to = value[0..@intCast(length)];
+    if (converts_to.len == 0) return false;
+    return !std.ascii.eqlIgnoreCase(converts_to, "none");
 }

@@ -113,6 +113,22 @@ profile may stop at any layer but never skips one (a contract test checks
     `0x005D6C1D` skips any index the map does not have; the second pass
     then places that house as before (a spectator gets YR's observer cell),
     and preset positions of real players are untouched.
+    It also makes Deploy on a selection its own inverse. The command
+    first checks whether the selected deployers (infantry that deploy,
+    `IsSimpleDeployer` units) are part deployed and part not, and if so
+    sends Deploy only to those that are not; otherwise everyone toggles.
+    Two kinds of unit sat in that check without taking part: a mode
+    toggle (Ares `Convert.Deploy`, such as the Bulldog) comes out of its
+    deploy as a fresh, undeployed type, and a unit Phobos leaves out of
+    the command (`LowDeployPriority`, while a unit without it is
+    selected) is never deployed. Either one always counted as "not
+    deployed", so after Deploy dug a group's GIs in, the next Deploy
+    left them dug in (and only flipped the Bulldogs back, or under Phobos
+    did nothing at all). The hook at `0x00730B9C` leaves both out of
+    that first check, reading `Convert.Deploy` and `LowDeployPriority`
+    from the rules INI, so it judges only the units that keep a deployed
+    state and receive the command. Upstream Phobos (master, November
+    2026) still filters only in the command's second pass.
   - **`expandmo99.mix/artmo.patch.ini`**: seven civilian buildings (`CAWHSE`,
     `CAJHUT`, `CANHSE01/02`, `CAPRSNF`, `CASLUMA`, `CABRKK`) name a `cargo`
     palette that no MO archive ships (all 41 other custom palettes ship every
