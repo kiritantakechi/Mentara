@@ -11,6 +11,7 @@ from mentara.mentalai.families import (
     Context,
     country_code,
     country_label,
+    leftovers,
 )
 from mentara.mentalai.model import (
     AIPlan,
@@ -49,6 +50,13 @@ def plan_ai(catalog: Catalog) -> AIPlan:
     builder = _Builder()
     for country in catalog.countries:
         orders = [order for family in FAMILIES for order in family(context, country)]
+        used = frozenset(
+            unit
+            for order in orders
+            if isinstance(order, Squad)
+            for _, unit in order.members
+        )
+        orders.extend(leftovers(context, country, used))
         builder.add_country(country, orders)
     return builder.plan(tuple(context.target_lists))
 

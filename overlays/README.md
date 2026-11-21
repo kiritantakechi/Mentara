@@ -515,6 +515,33 @@ profile may stop at any layer but never skips one (a contract test checks
       Regen and Wonder Drugs, Kinetic Barrier: infantry; Rage,
       Illusion, Chronoboost, Glacial Screen) and casting it before the
       push.
+    - The whole roster: every combat unit a country can build has a
+      squad, as a coverage test against MO's own AI showed it should
+      (MO's AI fielded 10 to 14 units per country that the slots alone
+      never chose). Lines, sieges and raids come in up to three
+      variants, the best unit per slot and then the second and third
+      best (weights 100%, 60%, 40%). Each strike craft has a squadron
+      (an anti-air-only craft holds the sky over the base) and each
+      warship a flotilla (artillery bombards, anti-ship hunts). Each
+      hero leads an escort, and one that wrecks buildings goes for the
+      construction yards first: M.A.D.M.A.N.'s AI twin, which MO's
+      Haihead AI drove at the yards and this AI had never fielded,
+      because heroes only filled an infantry slot. Units that unfold
+      into a turret, a minefield, an outpost or a forward war factory
+      deploy outside the enemy base (Fury Drone, Sweeper, Hazequad, War
+      Rig, Mobile War Factory). Bomb planters mine power plants and
+      buildings (Ivan, Arsonist, Repulsor, Virus, Ghost). Each armed
+      carrier rides out with the infantry that fit it (IFVs, the Battle
+      Fortress, Jackal, Borillo, Halftrack, Sting), Phobos 10103 seating
+      them. Engineers are also air-dropped by aircraft transport (the
+      Stallion). A last pass gives every combat unit still unused a
+      strike group of its own. Units whose weapons disable, freeze,
+      mark or buff (EMP, attached effects, parasites, berserk) count as
+      combat units and fill a disabler slot in the lines; a player's
+      unit with an AI twin (`Convert.HumanToComputer`) gives way to the
+      twin everywhere; anti-air is judged against the armours aircraft
+      actually wear (MO's `f_*` armours, which anti-air warheads name in
+      `Versus`), not vehicle armour, and Ares `ExtraWarheads` count.
     - Conduct: every TeamType key the engine reads for AI teams follows
       the squad's job, from a doctrine per kind of squad, then from its
       members. Direct lines, sieges and boost assaults drive straight in
@@ -648,6 +675,16 @@ profile may stop at any layer but never skips one (a contract test checks
       twice and fell by minute four, so its controllers were not seen
       fighting; the others' guards refilled instead of being raised
       again (15 base-watch teams against 49).
+    - With the whole roster (Russia, USA, PsiCorps and Haihead, nine
+      minutes): 969 teams from every family, the new ones included:
+      squadrons of a dozen aircraft types, carriers (Borillo, IFV,
+      Jackal, Sting, Scavenger), strike groups, bombers (Ivan, Virus,
+      Repulsor, Ghost), forward deployers, air drops, and every hero:
+      Haihead's M.A.D.M.A.N. twin formed twice and reached its staging
+      cell outside the enemy base on its way to the yards, beside
+      Tanya, Volkov, Chitzkoi, Libra, Siberian Fin and Sicali. No
+      unknown script action, and production abandoned only a handful of
+      times.
   - Rules in the first wave:
     - **aura**: 19 field emitters (Ultra Dome, Lightning Rod, Repair
       Crane, Iron Guard, Disruptor, Chimera Core, Haze Core, Magnetic
@@ -972,9 +1009,13 @@ with air, 05-06 siege, 07-11 blitz, feint, economy, power and stealth
 raids, 12 pincer, 13 air strike, 14 feint and strike, 15 base watch, 16
 patrol, 17 tech guard, 18 sky guard, 19 superweapon snipe, 20-25
 capture, garrison, bunkers, bio reactor, hijack, 26 spies, 27 engineer
-drops, 30-32 navy, 34 escorted siege, 35 Chronosphere, 36 Iron
-Curtain, 37 boost assaults, 38 blackout assault, 39 finishing hunt,
-50-59 counter triggers, 60-89 counter squads, 99 MCV. Scripts are numbered by kind
+drops (2711-2713 by air), 30-32 navy, 33 flotillas, 34 escorted siege,
+35 Chronosphere, 36 Iron Curtain, 37 boost assaults, 38 blackout
+assault, 39 finishing hunt, 41 squadrons, 42 heroes, 43 forward
+deployers, 44 bombers, 45 carriers, 46 strike groups, 50-59 counter
+triggers, 60-89 counter squads, 99 MCV. A line, siege or raid variant
+puts its rank in the third digit (`MNTTF0112RU-G` is the second-best
+tier-2 line). Scripts are numbered by kind
 (`MNTSC1000-G`), with the country code when they cast that country's
 superweapons (`MNTSC1000RU-G`). Their names take the
 country's label where MO's name has the side's ("Last Bastion - Condor

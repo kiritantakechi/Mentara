@@ -24,13 +24,16 @@ __all__ = [
     "absorb",
     "air_strike",
     "blitz",
+    "bombing",
     "capture_tech",
     "chrono_assault",
     "counter_hunt",
     "curtain_charge",
+    "decapitate",
     "drop",
     "economy_raid",
     "feint",
+    "forward_deploy",
     "garrison",
     "hijack",
     "infiltrate",
@@ -38,6 +41,7 @@ __all__ = [
     "line_flank",
     "line_hunt",
     "make_script",
+    "mounted",
     "naval_bombard",
     "naval_hunt",
     "naval_line",
@@ -90,6 +94,7 @@ _P_MOVE_ENEMY: Final[int] = 10050
 _P_MOVE_ENEMY_FARTHER: Final[int] = 10056
 _P_MOVE_FRIENDLY: Final[int] = 10053
 _P_AREA_GUARD: Final[int] = 10100
+_P_LOAD: Final[int] = 10103
 _P_MOVE_DISTANCE: Final[int] = 12001
 _P_MOVE_END: Final[int] = 12002
 _P_REWARD: Final[int] = 14000
@@ -347,6 +352,67 @@ def _either_order(
 ) -> _Draft:
     """Two targets in either order, the first first with a chance."""
     return _Draft().either(percent, (first, second), (second, first))
+
+
+def decapitate(casts: tuple[int, ...]) -> Lines:
+    """Stage, then go for the construction yards, then everything.
+
+    For a hero that out-damages buildings, such as a walking bomb.
+    """
+    return (
+        _stage(closer=50)
+        .then(
+            *_casts(casts),
+            (_P_ATTACK_ONCE, T_CONSTRUCTION_YARD),
+            (_P_ATTACK_ONCE, T_CONSTRUCTION_YARD),
+            (_ATTACK, FACTORIES),
+            (_ATTACK, STRUCTURES),
+            *_finish(),
+        )
+        .done()
+    )
+
+
+def mounted(casts: tuple[int, ...]) -> Lines:
+    """Board the team's own carriers, ride out, fight from them.
+
+    Phobos 10103 seats each passenger in a transport of the same team
+    (an IFV takes its weapon from its passenger; an open-topped carrier
+    lets its squad fire); then the team attacks as a line.
+    """
+    return (
+        _Draft()
+        .then((_REGROUP_AT_BASE, 0), (_P_LOAD, 0))
+        .then(*_stage(closer=50).lines[1:])
+        .maybe(70, (_P_AREA_GUARD, _STAGE_FIGHT))
+        .then(
+            *_casts(casts),
+            (_ATTACK, DEFENSES),
+            (_ATTACK, STRUCTURES),
+            *_finish(),
+        )
+        .done()
+    )
+
+
+def forward_deploy() -> Lines:
+    """Stage outside the enemy base and deploy there (vanilla 9).
+
+    For units that unfold into a turret, a minefield or an outpost; the
+    escort then fights from the new position.
+    """
+    return _stage(closer=50).then((_DEPLOY, 0), *_finish()).done()
+
+
+def bombing() -> Lines:
+    """Plant bombs on power plants or any building, as rolled."""
+    return (
+        _Draft()
+        .then((_REGROUP_AT_BASE, 0))
+        .either(50, ((_P_ATTACK, T_POWER),), ((_P_ATTACK, T_STRUCTURES),))
+        .then(*_finish())
+        .done()
+    )
 
 
 def blitz() -> Lines:

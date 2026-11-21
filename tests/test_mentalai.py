@@ -110,6 +110,11 @@ NumberOfDocks=4
 3=MCV
 4=TWIN
 5=HARV
+6=PROTO
+7=PROTOAI
+8=WRECKER
+9=CARRIER
+10=OUTPOST
 
 [SuperWeaponTypes]
 0=CurtainSW
@@ -151,8 +156,63 @@ Prerequisite=AIRF
 AirportBound=yes
 Cost=1200
 Strength=200
+Armor=jet
+Primary=Cannon
+
+; A player's unit; Ares hands the AI its twin instead.
+[PROTO]
+TechLevel=5
+Owner=Alpha
+Prerequisite=ANYWEAP,RADR
+Convert.HumanToComputer=PROTOAI
+Cost=3000
+Strength=200
+Armor=light
+Primary=Howitzer
+
+[PROTOAI]
+TechLevel=5
+Owner=Alpha
+Prerequisite=ANYWEAP,RADR,LOCK
+Cost=3000
+Strength=200
+Armor=light
+Primary=Howitzer
+
+; A hero that wrecks buildings.
+[WRECKER]
+TechLevel=8
+Owner=Alpha
+Prerequisite=ANYWEAP,LABS
+BuildLimit=1
+Cost=3000
+Strength=2000
+Armor=heavy
+Primary=Demolish
+
+; An armed, open-topped carrier.
+[CARRIER]
+TechLevel=2
+Owner=Alpha
+Prerequisite=ANYWEAP
+Passengers=4
+SizeLimit=1
+OpenTopped=yes
+Cost=700
+Strength=300
 Armor=light
 Primary=Cannon
+
+; Unfolds into a building.
+[OUTPOST]
+TechLevel=2
+Owner=Alpha
+Prerequisite=ANYWEAP
+DeploysInto=POWR
+Cost=1500
+Strength=400
+Armor=medium
+Primary=Rifle
 
 [GI]
 TechLevel=1
@@ -323,8 +383,20 @@ Verses=100%,100%,100%,0%,0%,0%,0%,0%,0%,0%,0%
 [AP]
 Verses=10%,10%,10%,100%,100%,100%,50%,50%,50%,100%,100%
 
+; Anti-air names the aircraft armour; vehicles take nothing.
 [Flak]
-Verses=50%,50%,50%,100%,100%,100%,0%,0%,0%,100%,100%
+Verses=50%,50%,50%,0%,0%,0%,0%,0%,0%,0%,0%
+Versus.jet=100%
+
+[Demolish]
+Damage=300
+ROF=90
+Range=4
+Projectile=Bullet
+Warhead=Wreck
+
+[Wreck]
+Verses=10%,10%,10%,30%,30%,30%,200%,200%,200%,0%,0%
 
 [HE]
 Verses=80%,80%,80%,80%,80%,80%,100%,100%,100%,100%,100%
@@ -559,6 +631,58 @@ def test_two_team_calls_pair_their_teams(rules: IniData) -> None:
     blackout = triggers["MNTTR3802AL-G"]
     assert blackout.gate.condition is Condition.ENEMY_POWER_SHORT
     assert blackout.support == "MNTTT0702AL-G"
+
+
+def test_player_versions_give_way_to_ai_twins(rules: IniData) -> None:
+    plan = plan_ai(build_catalog(rules))
+    fielded = {unit for tf in plan.task_forces for _, unit in tf.members}
+    assert "PROTO" not in fielded
+    assert "PROTOAI" in fielded
+
+
+def test_anti_air_is_judged_against_aircraft_armour(rules: IniData) -> None:
+    # Flak does nothing to vehicles; it hits the jet's own armour.
+    units = build_catalog(rules).units
+    assert units["flak"].has(Role.AA)
+
+
+def test_a_wrecker_hero_goes_for_the_yards(rules: IniData) -> None:
+    plan = plan_ai(build_catalog(rules))
+    scripts = {s.id: s for s in plan.scripts}
+    hero = next(t for t in plan.teams if t.name.endswith("Hero WRECKER"))
+    assert (10001, 26) in scripts[hero.script].lines
+
+
+def test_every_combat_unit_takes_the_field(rules: IniData) -> None:
+    catalog = build_catalog(rules)
+    plan = plan_ai(catalog)
+    fielded = {unit.lower() for tf in plan.task_forces for _, unit in tf.members}
+    (country,) = catalog.countries
+    jobs = {Role.HARVESTER, Role.MCV, Role.PLAYER_VERSION}
+    for name in country.units:
+        unit = catalog.units[name]
+        if unit.roles & {Role.GUN, Role.EFFECT} and not unit.roles & jobs:
+            assert name in fielded, name
+
+
+def test_carriers_ride_with_infantry_and_deployers_deploy(rules: IniData) -> None:
+    plan = plan_ai(build_catalog(rules))
+    task_forces = {tf.id: tf.members for tf in plan.task_forces}
+    teams = {t.name: t for t in plan.teams}
+    scripts = {s.id: s for s in plan.scripts}
+    mounted = teams["Alpha - Mental Mounted CARRIER"]
+    assert {u for _, u in task_forces[mounted.task_force]} == {"CARRIER", "GI"}
+    assert (10103, 0) in scripts[mounted.script].lines
+    forward = teams["Alpha - Mental Forward OUTPOST"]
+    assert (9, 0) in scripts[forward.script].lines
+
+
+def test_variants_field_second_choices(rules: IniData) -> None:
+    plan = plan_ai(build_catalog(rules))
+    task_forces = {tf.id: tf.members for tf in plan.task_forces}
+    best = task_forces["MNTTF0102AL-G"]
+    second = task_forces["MNTTF0112AL-G"]
+    assert best != second
 
 
 ENHANCE = Path(__file__).resolve().parents[1] / "overlays" / "enhance"

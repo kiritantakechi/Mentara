@@ -17,9 +17,12 @@ from mentara.mentalai.catalog import Kind, Role, Unit
 __all__ = [
     "AA",
     "AIR",
+    "ANY_HERO",
     "ARTILLERY",
+    "BOMBER",
     "CONTROLLER",
     "DETECTOR",
+    "DISABLER",
     "ENGINEER",
     "FAST",
     "FRONT",
@@ -165,6 +168,43 @@ CONTROLLER: Final[Slot] = Slot(
     ),
     lambda u, _t: u.strength / _cost(u),
     rank=7,
+)
+# Disables, freezes, marks or buffs: effect specialists without a gun
+# first, as MO pairs its painters, freezers and disablers with armour.
+DISABLER: Final[Slot] = Slot(
+    "disabler",
+    lambda u: (
+        _fighter(u)
+        and u.has(Role.EFFECT)
+        and not u.roles & {Role.HERO, Role.TRANSPORT, Role.BOMBER}
+    ),
+    lambda u, _t: _vitality(u) / _cost(u) * (1.0 if u.has(Role.GUN) else 3.0),
+    rank=4,
+)
+# Plants timed bombs on buildings and vehicles.
+BOMBER: Final[Slot] = Slot(
+    "bomber",
+    lambda u: (
+        u.kind is Kind.INFANTRY
+        and _ground(u)
+        and u.has(Role.BOMBER)
+        and not u.roles & {Role.HERO, Role.INFILTRATOR}
+    ),
+    _cheapest,
+    rank=3,
+)
+# Any hero that fights, by what it hurts.
+ANY_HERO: Final[Slot] = Slot(
+    "any hero",
+    lambda u: (
+        u.has(Role.HERO)
+        and bool(u.roles & {Role.GUN, Role.EFFECT})
+        and not u.roles & _NON_COMBAT
+    ),
+    lambda u, _t: (
+        u.strength + u.firepower.infantry + u.firepower.vehicle + u.firepower.building
+    ),
+    rank=9,
 )
 # A side with no main battle tank at a tier leads with its best armed
 # combat vehicle instead, an armed carrier included.
@@ -386,13 +426,14 @@ def counter_slot(armor: str, *, airborne: bool, naval: bool) -> Slot:
     )
 
 
-def fill(
+def fill(  # noqa: PLR0913 - the slots, the pool and how to read them
     slots: Iterable[tuple[Slot, int]],
     units: Iterable[Unit],
     tier: int,
     *,
     required: Iterable[str] = (),
     skip_detector: bool = True,
+    rank: int = 0,
 ) -> Filled | None:
     """Fill slots from the units a country fields.
 
@@ -407,12 +448,16 @@ def fill(
         required: Slot names that must be filled.
         skip_detector: Whether a chosen detector makes the detector slot
             redundant.
+        rank: Take each slot's rank-th best unit (0 is the best), or its
+            last when it has fewer: variants of one team.
 
     Returns:
         The members and each member's leadership rank, or None when a
         required slot stays empty or nothing fits.
     """
-    pool = tuple(units)
+    # A player's version is converted to its AI twin for the AI; only
+    # the twin is fielded.
+    pool = tuple(u for u in units if not u.has(Role.PLAYER_VERSION))
     needed = frozenset(required)
     counts: dict[str, int] = {}
     ranks: dict[str, int] = {}
@@ -428,7 +473,8 @@ def fill(
             if slot.name in needed:
                 return None
             continue
-        best = max(candidates, key=lambda u: (slot.score(u, tier), u.id))
+        ordered = sorted(candidates, key=lambda u: (slot.score(u, tier), u.id))
+        best = ordered[max(len(ordered) - 1 - rank, 0)]
         if best.id not in counts and len(counts) >= _TASK_FORCE_TYPES_MAX:
             continue
         counts[best.id] = counts.get(best.id, 0) + count

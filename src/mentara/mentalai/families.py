@@ -28,9 +28,12 @@ from mentara.mentalai.scripts import Lines, Script, make_script
 from mentara.mentalai.slots import (
     AA,
     AIR,
+    ANY_HERO,
     ARTILLERY,
+    BOMBER,
     CONTROLLER,
     DETECTOR,
+    DISABLER,
     ENGINEER,
     FAST,
     FRONT,
@@ -357,7 +360,7 @@ def _strip(name: str) -> str:
 # --- Assault lines ---------------------------------------------------
 
 _LINE_SLOTS: Final[dict[int, _Slots]] = {
-    1: ((FRONT, 4), (SCREEN, 3), (AA, 1), (DETECTOR, 1)),
+    1: ((FRONT, 4), (SCREEN, 3), (AA, 1), (DISABLER, 1), (DETECTOR, 1)),
     2: (
         (FRONT, 4),
         (ARTILLERY, 2),
@@ -365,6 +368,7 @@ _LINE_SLOTS: Final[dict[int, _Slots]] = {
         (AA, 2),
         (SUPPORT, 1),
         (CONTROLLER, 2),
+        (DISABLER, 1),
         (DETECTOR, 1),
     ),
     3: (
@@ -375,6 +379,7 @@ _LINE_SLOTS: Final[dict[int, _Slots]] = {
         (AA, 2),
         (SUPPORT, 1),
         (CONTROLLER, 1),
+        (DISABLER, 1),
     ),
 }
 # Direct, flank and hunt lines share members; each has its own weight.
@@ -394,6 +399,37 @@ _FEINT_STRIKE_WEIGHT: Final[int] = 35
 _FEINT_CODE: Final[int] = 8
 
 
+# Variants of a team: the best unit per slot, then the second and third
+# best, so a side fields its whole roster and no two waves need look
+# alike. Weights fall with the rank.
+_VARIANT_SHARES: Final[tuple[float, ...]] = (1.0, 0.6, 0.4)
+
+
+def _variants(
+    slots: _Slots,
+    units: tuple[Unit, ...],
+    tier: int,
+    *,
+    required: tuple[str, ...] = (),
+) -> Iterator[tuple[int, Filled]]:
+    """Each distinct filling of the slots, best first, with its rank."""
+    seen: set[tuple[tuple[int, str], ...]] = set()
+    for rank in range(len(_VARIANT_SHARES)):
+        filled = fill(slots, units, tier, required=required, rank=rank)
+        if filled is None or filled[0] in seen:
+            continue
+        seen.add(filled[0])
+        yield rank, filled
+
+
+def _variant_label(name: str, tier: int, rank: int) -> str:
+    return f"{name} T{tier}" + (f" {chr(ord('A') + rank)}" if rank else "")
+
+
+def _variant_weight(weight: int, rank: int) -> int:
+    return max(1, round(weight * _VARIANT_SHARES[rank]))
+
+
 def lines(ctx: Context, country: Country) -> Iterator[Order]:
     """Combined-arms lines: direct, flanking and army-hunting.
 
@@ -408,24 +444,28 @@ def lines(ctx: Context, country: Country) -> Iterator[Order]:
     }
     for tier in _TIERS:
         gate = _tier_gate(country, tier)
-        filled = fill(
-            _LINE_SLOTS[tier], ctx.fielded(country, tier), tier, required=("front",)
-        )
-        if gate is None or filled is None:
+        if gate is None:
+            continue
+        units = ctx.fielded(country, tier)
+        variants = list(_variants(_LINE_SLOTS[tier], units, tier, required=("front",)))
+        if not variants:
             continue
         for code, kind, script_code, weights in _LINE_KINDS:
-            number = code * 100 + tier
             script = _script(country, script_code, kind, builders[code](casts))
-            yield _squad(
-                ctx,
-                number,
-                f"{kind} T{tier}",
-                filled,
-                script,
-                conduct=_LINE_CONDUCT[code],
-                max_teams=3,
-            )
-            yield Call(number, f"{kind} T{tier}", number, gate, weights[tier - 1])
+            for rank, filled in variants:
+                number = code * 100 + 10 * rank + tier
+                label = _variant_label(kind, tier, rank)
+                yield _squad(
+                    ctx,
+                    number,
+                    label,
+                    filled,
+                    script,
+                    conduct=_LINE_CONDUCT[code],
+                    max_teams=3,
+                )
+                weight = _variant_weight(weights[tier - 1], rank)
+                yield Call(number, label, number, gate, weight)
         if _LINE_AIR_WEIGHTS[tier - 1]:
             yield Call(
                 _LINE_AIR * 100 + tier,
@@ -466,13 +506,19 @@ def sieges(ctx: Context, country: Country) -> Iterator[Order]:
     slots: _Slots = ((SIEGE, 3), (FRONT, 2), (SCREEN, 2), (AA, 1))
     for tier in (2, 3):
         gate = _tier_gate(country, tier)
-        filled = fill(slots, ctx.fielded(country, tier), tier, required=("siege",))
-        if gate is None or filled is None:
+        if gate is None:
             continue
-        number = _SIEGE * 100 + tier
+        units = ctx.fielded(country, tier)
+        variants = list(_variants(slots, units, tier, required=("siege",)))
+        if not variants:
+            continue
         script = _script(country, 2000, "Siege", sc.siege(country.front_casts))
-        yield _squad(ctx, number, f"Siege T{tier}", filled, script, conduct=_ASSAULT)
-        yield Call(number, f"Siege T{tier}", number, gate, 70)
+        for rank, filled in variants:
+            number = _SIEGE * 100 + 10 * rank + tier
+            label = _variant_label("Siege", tier, rank)
+            yield _squad(ctx, number, label, filled, script, conduct=_ASSAULT)
+            yield Call(number, label, number, gate, _variant_weight(70, rank))
+        number = _SIEGE * 100 + tier
         yield Call(
             _SIEGE_AIR * 100 + tier,
             f"Siege + Air T{tier}",
@@ -537,14 +583,13 @@ def raids(ctx: Context, country: Country) -> Iterator[Order]:
         script = _script(country, script_code, name, _RAID_SCRIPTS[code]())
         for tier in tiers:
             gate = _tier_gate(country, tier)
-            filled = fill(slots, ctx.fielded(country, tier), tier)
-            if gate is None or filled is None:
+            if gate is None:
                 continue
-            number = code * 100 + tier
-            yield _squad(
-                ctx, number, f"{name} T{tier}", filled, script, conduct=conduct
-            )
-            yield Call(number, f"{name} T{tier}", number, gate, weight)
+            for rank, filled in _variants(slots, ctx.fielded(country, tier), tier):
+                number = code * 100 + 10 * rank + tier
+                label = _variant_label(name, tier, rank)
+                yield _squad(ctx, number, label, filled, script, conduct=conduct)
+                yield Call(number, label, number, gate, _variant_weight(weight, rank))
 
 
 # --- Air -------------------------------------------------------------
@@ -781,20 +826,27 @@ def infiltration(ctx: Context, country: Country) -> Iterator[Order]:
             script_lines=sc.infiltrate(target),
             weight=6,
         )
-    filled = _drop_team(ctx, country)
     gate = _unlock_gate(country, 2)
-    if filled is None or gate is None:
+    if gate is None:
         return
-    for index, (target, name) in enumerate(_DROP_TARGETS, start=1):
-        number = 2700 + index
-        script = _script(country, 7100 + target, f"Drop vs {name}", sc.drop(target))
-        label = f"Engineer Drop vs {name}"
-        yield _squad(ctx, number, label, filled, script, conduct=_DROP, max_teams=1)
-        yield Call(number, f"Engineer Drop vs {name}", number, gate, 10)
+    for offset, airborne in ((0, False), (10, True)):
+        filled = _drop_team(ctx, country, airborne=airborne)
+        if filled is None:
+            continue
+        way = "Air Drop" if airborne else "Engineer Drop"
+        for index, (target, name) in enumerate(_DROP_TARGETS, start=1):
+            number = 2700 + offset + index
+            script = _script(country, 7100 + target, f"Drop vs {name}", sc.drop(target))
+            label = f"{way} vs {name}"
+            yield _squad(ctx, number, label, filled, script, conduct=_DROP, max_teams=1)
+            yield Call(number, label, number, gate, 10)
 
 
-def _drop_team(ctx: Context, country: Country) -> Filled | None:
-    """A transport and two engineers that fit in it."""
+def _drop_team(ctx: Context, country: Country, *, airborne: bool) -> Filled | None:
+    """A transport and two engineers that fit in it, by land or air.
+
+    Vanilla 14 seats them in one transport, an aircraft first.
+    """
     units = ctx.fielded(country, _TOP)
     engineers = fill(((ENGINEER, 2),), units, _TOP)
     if engineers is None:
@@ -803,15 +855,29 @@ def _drop_team(ctx: Context, country: Country) -> Filled | None:
     carriers = tuple(
         u
         for u in units
-        if u.size_limit >= engineer.size and u.passengers >= 2  # noqa: PLR2004
+        if u.size_limit >= engineer.size
+        and u.passengers >= 2  # noqa: PLR2004 - two engineers
+        and u.has(Role.AIRBORNE) == airborne
+        and u.has(Role.TRANSPORT)
+        and not u.roles & {Role.NAVAL, Role.HARVESTER, Role.MCV}
     )
-    transport = fill(((TRANSPORT, 1),), carriers, _TOP)
+    pick = _AIR_TRANSPORT if airborne else TRANSPORT
+    transport = fill(((pick, 1),), carriers, _TOP)
     if transport is None:
         return None
     return (
         transport[0] + engineers[0],
         {**transport[1], **engineers[1]},
     )
+
+
+# An aircraft that carries infantry: the faster and roomier the better.
+_AIR_TRANSPORT: Final[Slot] = Slot(
+    "air transport",
+    lambda u: u.has(Role.AIRBORNE, Role.TRANSPORT),
+    lambda u, _t: u.passengers * u.speed,
+    rank=5,
+)
 
 
 # --- Naval -----------------------------------------------------------
@@ -983,6 +1049,269 @@ def _counter_squad(
     return _squad(ctx, number, label, filled, script, conduct=_COUNTER)
 
 
+# --- Every unit its job ----------------------------------------------
+#
+# Slots take a side's best units; these families give every other unit
+# a squad of its own, so a side fields its whole roster: each strike
+# craft and ship, each hero, each unit that deploys forward, each
+# bomber and each carrier.
+
+
+def _roster(
+    ctx: Context, country: Country, fits: Callable[[Unit], bool]
+) -> Iterator[tuple[Unit, int]]:
+    """The country's units that fit, with their tiers."""
+    for name, tier in country.units.items():
+        unit = ctx.catalog.units.get(name)
+        if unit is None or unit.has(Role.PLAYER_VERSION) or not fits(unit):
+            continue
+        yield unit, tier
+
+
+def _single(unit: Unit, count: int) -> Filled:
+    return ((count, unit.id),), {unit.id: 8}
+
+
+_COMBAT_JOBS: Final[frozenset[Role]] = frozenset(
+    {
+        Role.HARVESTER,
+        Role.MCV,
+        Role.DEPLOYER,
+        Role.ENGINEER,
+        Role.INFILTRATOR,
+        Role.HERO,
+        Role.TRANSPORT,
+    }
+)
+
+
+def _fights(unit: Unit) -> bool:
+    return bool(unit.roles & {Role.GUN, Role.EFFECT}) and not unit.roles & _COMBAT_JOBS
+
+
+def _flies_to_fight(unit: Unit) -> bool:
+    if not unit.has(Role.AIRBORNE) or unit.roles & (_COMBAT_JOBS | {Role.NAVAL}):
+        return False
+    return bool(unit.roles & {Role.GUN, Role.EFFECT, Role.AA})
+
+
+def _sails_to_fight(unit: Unit) -> bool:
+    """A warship, an armed naval transport included."""
+    jobs = _COMBAT_JOBS - {Role.TRANSPORT}
+    armed = bool(unit.roles & {Role.GUN, Role.EFFECT})
+    return unit.has(Role.NAVAL) and armed and not unit.roles & jobs
+
+
+def _fighting_hero(unit: Unit) -> bool:
+    return unit.has(Role.HERO) and bool(unit.roles & {Role.GUN, Role.EFFECT})
+
+
+def _fights_on_ground(unit: Unit) -> bool:
+    return _fights(unit) and not unit.roles & {Role.AIRBORNE, Role.NAVAL}
+
+
+def _ground_deployer(unit: Unit) -> bool:
+    return unit.has(Role.DEPLOYER) and not unit.roles & {Role.AIRBORNE, Role.NAVAL}
+
+
+def _armed_carrier(unit: Unit) -> bool:
+    return (
+        unit.kind is Kind.VEHICLE
+        and unit.has(Role.TRANSPORT)
+        and bool(unit.roles & {Role.GUN, Role.EFFECT})
+        and unit.size_limit > 0
+        and not unit.roles
+        & {Role.AIRBORNE, Role.NAVAL, Role.HARVESTER, Role.MCV, Role.HERO}
+    )
+
+
+def squadrons(ctx: Context, country: Country) -> Iterator[Order]:
+    """A squadron per strike craft, and a flotilla per warship.
+
+    Airfield-bound craft fly in pairs, one team at a time, and are not
+    cloned: each needs a pad. Ships go where their guns suit them:
+    artillery bombards, anti-ship hunts, others form a line.
+    """
+    for index, (unit, tier) in enumerate(
+        _roster(ctx, country, _flies_to_fight), start=1
+    ):
+        gate = _unlock_gate(country, tier)
+        if gate is None:
+            continue
+        docked = unit.has(Role.DOCKED)
+        fire = unit.firepower
+        if unit.has(Role.AA_ONLY):
+            # An interceptor holds the sky over the base.
+            script = _script(country, 5200, "Sky Guard", sc.watch(()))
+        else:
+            aim = max(
+                ("vehicles", fire.vehicle),
+                ("infantry", fire.infantry),
+                ("defenses", fire.building),
+                key=lambda pair: pair[1],
+            )[0]
+            code, quarries = _AIR_QUARRIES[aim]
+            script = make_script(
+                code, f"Mental Air Strike vs {aim}", sc.air_strike(*quarries), ""
+            )
+        number = 4100 + index
+        label = f"Squadron {unit.id}"
+        yield _squad(
+            ctx,
+            number,
+            label,
+            _single(unit, 2 if docked else 4),
+            script,
+            conduct=_SORTIE,
+            max_teams=1 if docked else 2,
+            unique=frozenset({unit.id}) if docked else frozenset(),
+        )
+        yield Call(number, label, number, gate, 30)
+    shipyard = country.factories.get(Factory.SHIPYARD)
+    for index, (unit, tier) in enumerate(
+        _roster(ctx, country, _sails_to_fight), start=1
+    ):
+        gate = (
+            _unlock_gate(country, tier)
+            if tier > 1
+            else (None if shipyard is None else _owns(shipyard))
+        )
+        if gate is None:
+            continue
+        if unit.has(Role.ARTILLERY):
+            code, name, lines_ = 9200, "Bombardment", sc.naval_bombard()
+        elif unit.roles & {Role.ANTI_ARMOUR, Role.DUAL}:
+            code, name, lines_ = 9100, "Sub Hunt", sc.naval_hunt()
+        else:
+            code, name, lines_ = 9000, "Navy", sc.naval_line()
+        script = _script(country, code, name, lines_)
+        number = 3300 + index
+        label = f"Flotilla {unit.id}"
+        yield _squad(ctx, number, label, _single(unit, 3), script, conduct=_NAVY)
+        yield Call(number, label, number, gate, 40)
+
+
+def heroes(ctx: Context, country: Country) -> Iterator[Order]:
+    """Each hero leads an escort; a wrecker goes for the yards.
+
+    A hero that hurts buildings most, such as M.A.D.M.A.N.'s AI twin,
+    goes for the construction yards first.
+
+    Mental AI lets the AI pass `BuildLimit`, so heroes return when lost.
+    """
+    escort: _Slots = ((ANY_HERO, 1), (FRONT, 2), (SCREEN, 2), (AA, 1))
+    for index, (unit, tier) in enumerate(
+        _roster(ctx, country, _fighting_hero), start=1
+    ):
+        gate = _unlock_gate(country, tier)
+        if gate is None:
+            continue
+        others = tuple(u for u in ctx.fielded(country, tier) if not u.has(Role.HERO))
+        if unit.has(Role.AIRBORNE):
+            filled: Filled | None = _single(unit, 1)
+        else:
+            filled = fill(escort, (unit, *others), tier, required=("any hero",))
+        if filled is None:
+            continue
+        fire = unit.firepower
+        wrecker = fire.building >= max(fire.infantry, fire.vehicle)
+        casts = country.front_casts
+        if wrecker:
+            script = _script(country, 8400, "Decapitation", sc.decapitate(casts))
+        else:
+            script = _script(country, 1000, "Line", sc.line_direct(casts))
+        number = 4200 + index
+        label = f"Hero {unit.id}"
+        yield _squad(ctx, number, label, filled, script, conduct=_ASSAULT, max_teams=1)
+        yield Call(number, label, number, gate, 40)
+
+
+def deployers(ctx: Context, country: Country) -> Iterator[Order]:
+    """Units that unfold into something deploy by the enemy base."""
+    script = _script(country, 8500, "Forward Deploy", sc.forward_deploy())
+    for index, (unit, tier) in enumerate(
+        _roster(ctx, country, _ground_deployer), start=1
+    ):
+        gate = _unlock_gate(country, tier)
+        escort = fill(((SCREEN, 2),), ctx.fielded(country, tier), tier)
+        if gate is None:
+            continue
+        count = 1 if unit.has(Role.HERO) else 2
+        members = ((count, unit.id),) + (escort[0] if escort else ())
+        ranks = {unit.id: 2, **(escort[1] if escort else {})}
+        number = 4300 + index
+        label = f"Forward {unit.id}"
+        yield _squad(ctx, number, label, (members, ranks), script, conduct=_ASSAULT)
+        yield Call(number, label, number, gate, 25)
+
+
+def bombers(ctx: Context, country: Country) -> Iterator[Order]:
+    """Bomb-planting infantry slip in and mine the buildings."""
+    script = _script(country, 8600, "Bombing", sc.bombing())
+    for index, (unit, tier) in enumerate(_roster(ctx, country, BOMBER.fits), start=1):
+        gate = _unlock_gate(country, tier)
+        if gate is None:
+            continue
+        number = 4400 + index
+        label = f"Bombers {unit.id}"
+        yield _squad(ctx, number, label, _single(unit, 3), script, conduct=_RAID)
+        yield Call(number, label, number, gate, 20)
+
+
+def carriers(ctx: Context, country: Country) -> Iterator[Order]:
+    """Each armed carrier rides out with the infantry that fit it best.
+
+    An IFV fights with its passenger's weapon, an open-topped carrier
+    lets its squad fire from inside: MO's IFV and carrier combinations.
+    """
+    casts = country.front_casts
+    script = _script(country, 8700, "Mounted Line", sc.mounted(casts))
+    for index, (unit, tier) in enumerate(
+        _roster(ctx, country, _armed_carrier), start=1
+    ):
+        gate = _unlock_gate(country, tier)
+        riders = tuple(
+            u
+            for u in ctx.fielded(country, tier)
+            if u.kind is Kind.INFANTRY and u.size <= unit.size_limit
+        )
+        filled = fill(((SCREEN, 1),), riders, tier) or fill(
+            ((INFANTRY, 1),), riders, tier
+        )
+        if gate is None or filled is None:
+            continue
+        rider = filled[0][-1][1]
+        seats = min(unit.passengers, 2)
+        members = ((2, unit.id), (2 * seats, rider))
+        number = 4500 + index
+        label = f"Mounted {unit.id}"
+        ranks = {unit.id: 12, rider: 8}
+        yield _squad(ctx, number, label, (members, ranks), script, conduct=_ASSAULT)
+        yield Call(number, label, number, gate, 40)
+
+
+def leftovers(ctx: Context, country: Country, used: frozenset[str]) -> Iterator[Order]:
+    """A strike group for every combat unit no other squad fields.
+
+    Runs after the other families, given the units their squads use, so
+    a side's whole roster takes the field.
+    """
+    script = _script(country, 1200, "Hunt", sc.line_hunt(country.front_casts))
+    roster = (
+        pair
+        for pair in _roster(ctx, country, _fights_on_ground)
+        if pair[0].id not in used
+    )
+    for index, (unit, tier) in enumerate(roster, start=1):
+        gate = _unlock_gate(country, tier)
+        if gate is None:
+            continue
+        number = 4600 + index
+        label = f"Strike Group {unit.id}"
+        yield _squad(ctx, number, label, _single(unit, 4), script, conduct=_HUNTER)
+        yield Call(number, label, number, gate, 25)
+
+
 # --- Opportunities ---------------------------------------------------
 
 # An enemy this short of credits cannot rebuild what it loses.
@@ -1048,6 +1377,11 @@ FAMILIES: Final[tuple[Family, ...]] = (
     occupation,
     infiltration,
     naval,
+    squadrons,
+    heroes,
+    deployers,
+    bombers,
+    carriers,
     superweapon_assaults,
     counters,
     opportunities,

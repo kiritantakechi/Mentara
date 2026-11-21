@@ -72,6 +72,13 @@ class Role(StrEnum):
     HIJACKER = "hijacker"
     STEALTH = "stealth"
     MIND_CONTROL = "mind-control"
+    # A weapon that disables, slows, freezes, marks or buffs rather than
+    # (or as well as) damaging.
+    EFFECT = "effect"
+    # Plants a timed bomb (Ivan bombs).
+    BOMBER = "bomber"
+    # A player's version: Ares converts it to an AI twin for the AI.
+    PLAYER_VERSION = "player-version"
 
 
 # The engine's base armour classes, in the order `Verses=` lists them.
@@ -113,6 +120,19 @@ _TECH_LEVEL_MAX: Final[int] = 10
 # Tiers by the tech level of the building that unlocks a unit.
 _TIER_2_TECH_LEVEL: Final[int] = 5
 _TIER_3_TECH_LEVEL: Final[int] = 8
+# Warhead keys of effects: EMP, erasing, parasites, berserk, paralysis
+# and the Ares and Phobos attached effects (marks, slows, freezes).
+_EFFECT_KEYS: Final[tuple[str, ...]] = (
+    "EMEffect",
+    "EMP.Duration",
+    "Temporal",
+    "Parasite",
+    "Psychedelic",
+    "Paralyzes",
+    "AttachEffect.Duration",
+    "AttachEffect.AttachTypes",
+)
+_OFF: Final[frozenset[str]] = frozenset({"no", "false", "0", ""})
 # Ares's targeting mode for a superweapon only a team script fires.
 _TEAM_CAST: Final[str] = "ironcurtain"
 _CHRONOSPHERE: Final[str] = "chronosphere"
@@ -375,6 +395,7 @@ class _Weapon:
     anti_air: bool
     anti_ground: bool
     lobbed: bool
+    extra_warheads: tuple[str, ...] = ()
 
 
 class _Reader:
@@ -401,6 +422,26 @@ class _Reader:
                     for name in rules.type_list(kind.value)
                 }
             )
+        )
+        # Aircraft wear armours of their own, which anti-air warheads
+        # name in `Versus.<armor>`: anti-air is judged against them.
+        self._air_armors = tuple(
+            sorted(
+                {
+                    (rules.get(name, "Armor") or "none").lower()
+                    for kind in Kind
+                    for name in rules.type_list(kind.value)
+                    if self._flies(name, kind)
+                }
+            )
+        )
+
+    def _flies(self, name: str, kind: Kind) -> bool:
+        locomotor = (self._rules.get(name, "Locomotor") or "").upper()
+        return (
+            kind is Kind.AIRCRAFT
+            or _yes(self._rules.get(name, "JumpJet"))
+            or locomotor in {_JUMPJET_LOCOMOTOR, _FLY_LOCOMOTOR}
         )
 
     # --- Units -------------------------------------------------------
@@ -444,12 +485,7 @@ class _Reader:
     def _roles(self, name: str, kind: Kind, fire: Firepower) -> frozenset[Role]:
         rules = self._rules
         roles: set[Role] = set()
-        locomotor = (rules.get(name, "Locomotor") or "").upper()
-        airborne = (
-            kind is Kind.AIRCRAFT
-            or _yes(rules.get(name, "JumpJet"))
-            or locomotor in {_JUMPJET_LOCOMOTOR, _FLY_LOCOMOTOR}
-        )
+        airborne = self._flies(name, kind)
         if airborne:
             roles.add(Role.AIRBORNE)
         if self._is_naval(name):
@@ -483,13 +519,10 @@ class _Reader:
             (_yes(rules.get(name, "Occupier")), Role.OCCUPIER),
             (_yes(rules.get(name, "VehicleThief")), Role.HIJACKER),
             (_yes(rules.get(name, "Cloakable")), Role.STEALTH),
-            (
-                any(
-                    _yes(rules.get(weapon.warhead, "MindControl"))
-                    for weapon in self._weapons(name)
-                ),
-                Role.MIND_CONTROL,
-            ),
+            (self._warheads_have(name, ("MindControl",)), Role.MIND_CONTROL),
+            (self._warheads_have(name, _EFFECT_KEYS), Role.EFFECT),
+            (self._warheads_have(name, ("IvanBomb",)), Role.BOMBER),
+            (bool(rules.get(name, "Convert.HumanToComputer")), Role.PLAYER_VERSION),
             (
                 bool(rules.get(name, "DeploysInto"))
                 and not self._deploys_into_yard(name),
@@ -498,6 +531,17 @@ class _Reader:
         )
         roles.update(role for present, role in flags if present)
         return frozenset(roles)
+
+    def _warheads_have(self, name: str, keys: tuple[str, ...]) -> bool:
+        """Whether any of the unit's weapons carries a warhead flag."""
+        rules = self._rules
+        for weapon in self._weapons(name):
+            for warhead in (weapon.warhead, *weapon.extra_warheads):
+                for key in keys:
+                    value = rules.get(warhead, key)
+                    if value is not None and value.lower() not in _OFF:
+                        return True
+        return False
 
     def _is_mbt(
         self,
@@ -545,7 +589,7 @@ class _Reader:
             infantry=self._best(land, _INFANTRY_ARMORS),
             vehicle=self._best(ground, _VEHICLE_ARMORS),
             building=self._best(land, _BUILDING_ARMORS),
-            air=self._best(air, _VEHICLE_ARMORS),
+            air=self._best(air, self._air_armors or _VEHICLE_ARMORS),
             hit=max((self._hit(w) for w in ground), default=0.0),
             range=longest.range if longest else 0.0,
             minimum_range=longest.minimum_range if longest else 0.0,
@@ -602,6 +646,7 @@ class _Reader:
             anti_air=_yes(rules.get(projectile, "AA")),
             anti_ground=_yes(rules.get(projectile, "AG"), default=True),
             lobbed=_yes(rules.get(projectile, "Arcing")),
+            extra_warheads=split_list(rules.get(name, "ExtraWarheads")),
         )
         if _yes(rules.get(name, "Spawner")):
             return self._spawned(weapon, owner)
