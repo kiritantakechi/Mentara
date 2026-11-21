@@ -16,6 +16,7 @@ from mentara.config import load_config
 from mentara.patcher import (
     INIAppend,
     INIKeyOp,
+    INIPatch,
     INISet,
     INIUpdateSection,
     PatchKind,
@@ -28,6 +29,9 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_DIR / "mentara.toml"
 BASE_LAYER = "overlays/base"
 PHOBOS_LAYER = "overlays/phobos"
+ENHANCE_LAYER = "overlays/enhance"
+# Bottom to top; each layer assumes the ones below it.
+LAYERS = (BASE_LAYER, PHOBOS_LAYER, ENHANCE_LAYER)
 _ENGINE_SUFFIXES = frozenset({".dll", ".exe", ".edb", ".pdb"})
 _HIDE_VERSION_RE = re.compile(r"-HideVersionWarning=([^\s\"'`,\]]+)")
 _EXPANSION_MIX_RE = re.compile(r"expandmo\d{2}\.mix")
@@ -44,12 +48,26 @@ def _layer_files(layer: str) -> list[Path]:
     return sorted(path for path in (PROJECT_DIR / layer).rglob("*") if path.is_file())
 
 
-def _patch_files(layer: str) -> list[tuple[Path, PatchKind]]:
+def _patch_files(layer: str) -> list[tuple[Path, Path, PatchKind]]:
+    # (patch file or fragment, target path in the layer, kind)
+    root = PROJECT_DIR / layer
     return [
-        (path, target[1])
+        (path, *target)
         for path in _layer_files(layer)
-        if (target := parse_patch_target(Path(path.name))) is not None
+        if (target := parse_patch_target(path.relative_to(root))) is not None
     ]
+
+
+def _ini_patches(layer: str) -> dict[Path, list[INIPatch]]:
+    # Every INI patch of a layer, grouped by target: a patch directory's
+    # fragments, in name order, form one patch.
+    patches: dict[Path, list[INIPatch]] = {}
+    for path, target, kind in _patch_files(layer):
+        if kind is PatchKind.INI:
+            text = path.read_text(encoding="utf-8")
+            patch = parse_ini_patch(text, source_path=path)
+            patches.setdefault(target, []).append(patch)
+    return patches
 
 
 def _c_string(image: bytes, offset: int) -> str:
@@ -117,31 +135,33 @@ def _syringe_hooks(image: bytes) -> tuple[set[_Hook], set[str]]:
     return hooks, exports
 
 
-def test_every_profile_stacks_base_directly_below_phobos() -> None:
-    config = load_config(CONFIG_PATH)
-
-    for name, profile in config.profiles.items():
+def test_every_profile_stacks_the_shipped_layers_in_order() -> None:
+    # A profile may stop at any layer but never skips or reorders one:
+    # each layer assumes everything below it.
+    for name, profile in load_config(CONFIG_PATH).profiles.items():
         layers = list(profile.layers)
-        if PHOBOS_LAYER not in layers:
-            continue
-        assert BASE_LAYER in layers, name
-        assert layers.index(BASE_LAYER) + 1 == layers.index(PHOBOS_LAYER), name
+        shipped = [layer for layer in layers if layer in LAYERS]
+        assert shipped == list(LAYERS[: len(shipped)]), name
+        if shipped:
+            start = layers.index(shipped[0])
+            assert layers[start : start + len(shipped)] == shipped, name
 
 
-def test_base_layer_ships_none_of_the_phobos_engine_files() -> None:
-    engine_names = {
-        path.name.casefold()
-        for path in (PROJECT_DIR / PHOBOS_LAYER).iterdir()
-        if path.is_file() and path.suffix.casefold() in _ENGINE_SUFFIXES
-    }
+def test_each_engine_file_ships_in_one_layer() -> None:
+    # Ares belongs to base and Phobos to phobos; a layer above them
+    # relies on the engine below instead of shipping its own copy.
+    owners: dict[str, list[str]] = {}
+    for layer in LAYERS:
+        for path in _layer_files(layer):
+            if path.suffix.casefold() in _ENGINE_SUFFIXES:
+                owners.setdefault(path.name.casefold(), []).append(layer)
 
-    assert engine_names
-    assert not engine_names & {
-        path.name.casefold() for path in _layer_files(BASE_LAYER)
-    }
+    assert {"ares.dll", "phobos.dll"} <= owners.keys()
+    assert {name: found for name, found in owners.items() if len(found) > 1} == {}
+    assert not any(ENHANCE_LAYER in found for found in owners.values())
 
 
-@pytest.mark.parametrize("layer", [BASE_LAYER, PHOBOS_LAYER])
+@pytest.mark.parametrize("layer", LAYERS)
 def test_new_archives_load_with_the_expansion_mixes(layer: str) -> None:
     # The engine parses CSF string tables and rules right after it
     # loads the EXPANDMO##.MIX archives. Archives found later (ECACHE*,
@@ -165,12 +185,12 @@ def test_new_archives_load_with_the_expansion_mixes(layer: str) -> None:
             assert archive in existing or _EXPANSION_MIX_RE.fullmatch(archive), path
 
 
-@pytest.mark.parametrize("layer", [BASE_LAYER, PHOBOS_LAYER])
+@pytest.mark.parametrize("layer", LAYERS)
 def test_every_shipped_patch_parses(layer: str) -> None:
     patches = _patch_files(layer)
 
     assert patches
-    for path, kind in patches:
+    for path, _, kind in patches:
         text = path.read_text(encoding="utf-8")
         match kind:
             case PatchKind.INI:
@@ -179,31 +199,28 @@ def test_every_shipped_patch_parses(layer: str) -> None:
                 assert parse_toml_patch(text, source_path=path), path
 
 
-@pytest.mark.parametrize("layer", [BASE_LAYER, PHOBOS_LAYER])
+@pytest.mark.parametrize("layer", LAYERS)
 def test_each_patch_updates_a_section_in_one_place(layer: str) -> None:
     # A second update of the same section would split one object's
-    # settings across the file. ([-X] then [X], which replaces a
-    # duplicated definition, is one deletion and one update.)
-    for path, kind in _patch_files(layer):
-        if kind is not PatchKind.INI:
-            continue
-        patch = parse_ini_patch(path.read_text(encoding="utf-8"), source_path=path)
+    # settings across the patch or its fragments. ([-X] then [X], which
+    # replaces a duplicated definition, is one deletion and one update.)
+    for target, patches in _ini_patches(layer).items():
         updated = [
             operation.section.casefold()
+            for patch in patches
             for operation in patch.operations
             if isinstance(operation, INIUpdateSection) and operation.section is not None
         ]
         repeated = sorted({name for name in updated if updated.count(name) > 1})
-        assert not repeated, (path, repeated)
+        assert not repeated, (target, repeated)
 
 
 def _ini_sections(layer: str, target: str) -> dict[str, tuple[INIKeyOp, ...]]:
     sections: dict[str, tuple[INIKeyOp, ...]] = {}
-    for path, kind in _patch_files(layer):
-        if kind is not PatchKind.INI or path.name.casefold() != f"{target}.patch.ini":
+    for target_path, patches in _ini_patches(layer).items():
+        if target_path.name.casefold() != f"{target}.ini":
             continue
-        patch = parse_ini_patch(path.read_text(encoding="utf-8"), source_path=path)
-        for operation in patch.operations:
+        for operation in (op for patch in patches for op in patch.operations):
             # Keys above the first header (section None) name no type.
             if (
                 isinstance(operation, INIUpdateSection)
@@ -214,7 +231,7 @@ def _ini_sections(layer: str, target: str) -> dict[str, tuple[INIKeyOp, ...]]:
     return sections
 
 
-@pytest.mark.parametrize("layer", [BASE_LAYER, PHOBOS_LAYER])
+@pytest.mark.parametrize("layer", LAYERS)
 def test_registered_animations_ship_their_art(layer: str) -> None:
     # A layer that appends to [Animations] ships the art section and the
     # shape too; otherwise the type keeps every art default and draws
@@ -242,10 +259,107 @@ def test_registered_animations_ship_their_art(layer: str) -> None:
         assert image.casefold() in shapes, name
 
 
+# Phobos loads a type's settings only if its list names it; a type that
+# is merely referenced is created with every default (Enumerable.h).
+_PHOBOS_TYPE_LISTS: dict[str, tuple[str, ...]] = {
+    "attacheffecttypes": (
+        "attacheffect.attachtypes",
+        "attacheffect.removetypes",
+        "attacheffect.requiredtypes",
+        "attacheffect.disallowedtypes",
+    ),
+    "digitaldisplaytypes": (
+        "digitaldisplaytypes",
+        "infantry.defaultdigitaldisplaytypes",
+        "vehicles.defaultdigitaldisplaytypes",
+        "aircraft.defaultdigitaldisplaytypes",
+        "buildings.defaultdigitaldisplaytypes",
+    ),
+    "selectboxtypes": (
+        "selectbox",
+        "defaultinfantryselectbox",
+        "defaultunitselectbox",
+    ),
+    "shieldtypes": ("shieldtype",),
+}
+
+
+@pytest.mark.parametrize("depth", range(1, len(LAYERS) + 1))
+def test_phobos_types_are_registered_and_defined(depth: int) -> None:
+    stack = LAYERS[:depth]
+    sections = {
+        name: ops
+        for layer in stack
+        for name, ops in _ini_sections(layer, "rulesmo").items()
+    }
+    for listed, keys in _PHOBOS_TYPE_LISTS.items():
+        registered = {
+            op.value.casefold()
+            for op in sections.get(listed, ())
+            if isinstance(op, INIAppend)
+        }
+        referenced = {
+            name.strip().casefold()
+            for ops in sections.values()
+            for op in ops
+            if isinstance(op, INISet) and op.key.casefold() in keys
+            for name in op.value.split(",")
+            if name.strip()
+        }
+        assert referenced <= registered, (stack[-1], listed, referenced - registered)
+        assert registered <= sections.keys(), (
+            stack[-1],
+            listed,
+            registered - sections.keys(),
+        )
+
+
+# Objects the layers add (named Phobos* or Enhance*) and the YR list
+# each kind must appear in; ExtraWarheads ignores an unlisted warhead.
+_YR_TYPE_LISTS: dict[str, tuple[str, ...]] = {
+    "weapontypes": (
+        "primary",
+        "secondary",
+        "eliteprimary",
+        "elitesecondary",
+        "feedbackweapon",
+        "deathweapon",
+        "airburstweapon",
+    ),
+    "warheads": ("warhead", "extrawarheads", "sw.warhead"),
+    "projectiles": ("projectile",),
+}
+_NEW_OBJECT_RE = re.compile(r"(?i)(phobos|enhance)\w*")
+
+
+@pytest.mark.parametrize("depth", range(1, len(LAYERS) + 1))
+def test_added_weapons_warheads_and_projectiles_are_listed(depth: int) -> None:
+    sections = {
+        name: ops
+        for layer in LAYERS[:depth]
+        for name, ops in _ini_sections(layer, "rulesmo").items()
+    }
+    for listed, keys in _YR_TYPE_LISTS.items():
+        registered = {
+            op.value.casefold()
+            for op in sections.get(listed, ())
+            if isinstance(op, INIAppend)
+        }
+        added = {
+            name.strip().casefold()
+            for ops in sections.values()
+            for op in ops
+            if isinstance(op, INISet) and op.key.casefold() in keys
+            for name in op.value.split(",")
+            if _NEW_OBJECT_RE.fullmatch(name.strip())
+        }
+        assert added <= registered, (LAYERS[depth - 1], listed, added - registered)
+
+
 def test_hide_version_warning_matches_the_shipped_phobos_build() -> None:
     # Phobos only honours the flag when it names its own FileVersion,
     # and the flag is repeated in the client patch and in mentara.toml.
-    sources = [CONFIG_PATH, *(path for path, _ in _patch_files(PHOBOS_LAYER))]
+    sources = [CONFIG_PATH, *(path for path, _, _ in _patch_files(PHOBOS_LAYER))]
     versions = {
         match.group(1)
         for source in sources

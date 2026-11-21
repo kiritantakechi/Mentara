@@ -44,7 +44,9 @@ args = []
 
 # Layers stack bottom to top: the game directory, then `overlays/base`
 # (Ares-only fixes to Mental Omega itself), then `overlays/phobos`
-# (Phobos engine fixes and modernization built on the fixed game).
+# (Phobos engine fixes and modernization built on the fixed game), then
+# `overlays/enhance` (MO's units, buildings and AI rewritten with Phobos
+# mechanics). A profile may stop at any layer but never skips one.
 
 [profiles.default]
 description = "Mental Omega Client: MO fixes + Phobos modernization"
@@ -65,6 +67,11 @@ args = [
     "gamemd.exe",
     "--args=-SPAWN -CD -SPEEDCONTROL -LOG -AFFINITY:1048575 -HideVersionWarning=0.5.0.0-alpha2",
 ]
+
+[profiles.enhance]
+description = "Mental Omega Client: MO fixes + Phobos modernization + Phobos gameplay rewrite"
+layers = ["overlays/base", "overlays/phobos", "overlays/enhance"]
+persist_state = true
 
 [profiles.base]
 description = "Mental Omega Client with MO fixes only (Ares 3.0p1, no Phobos)"

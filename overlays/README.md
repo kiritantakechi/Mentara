@@ -8,11 +8,16 @@ this order (bottom to top):
 Mental Omega 3.3.6 game directory   (read-only)
 └─ overlays/base     fixes and adjustments to MO itself; Ares 3.0p1, no Phobos
    └─ overlays/phobos   Phobos engine fixes and modernization on the fixed game
+      └─ overlays/enhance   MO's units, buildings and AI rewritten with Phobos
 ```
 
 `overlays/base` must keep working on its own (`just launch base`), so it holds
 no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
 `overlays/phobos`, which may assume the base fixes are present beneath it.
+`overlays/phobos` changes how the game looks and fixes the engine but leaves
+every unit's logic alone; `overlays/enhance` is where gameplay changes. A
+profile may stop at any layer but never skips one (a contract test checks
+`mentara.toml`), and each engine file ships in exactly one layer.
 
 ## Included Layers
 
@@ -277,6 +282,99 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
     `Phobos.dll`). Saves are tied to the Phobos version line, and pre-Phobos
     saves are hidden.
   - Source: https://github.com/Phobos-developers/Phobos/releases/tag/v0.5-alpha2
+- `overlays/enhance/`: Mental Omega's units, buildings, superweapons and
+  skirmish AI rewritten with Phobos (profile `enhance`). Every object
+  keeps its MO role, faction, tech level and cost; a rule changes how it
+  plays that role, replacing a workaround MO had to build under Ares 3.0
+  with the mechanic Phobos provides, or removing a limit that worked
+  against the role. Rules apply to every object that fits them on all
+  four sides, and the AI is given what it needs to use them.
+  - **`expandmo99.mix/rulesmo.patch.ini/`** is a patch directory:
+    `shared.ini` holds the charter, the rule catalogue, the global keys,
+    the Phobos types and the objects several sides use; `allied.ini`,
+    `soviet.ini`, `epsilon.ini` and `foehn.ini` hold one section per
+    object, each key group under the name of the rule it follows. A
+    contract test keeps each object in one section across the fragments,
+    every Phobos type registered in its list (Phobos loads only listed
+    types; others keep every default) and every added weapon, warhead and
+    projectile in its YR list (`ExtraWarheads` ignores unlisted ones).
+  - **`expandmo99.mix/artmo.patch.ini`**: art for the rules (the timer
+    anims below).
+  - Rules in the first wave:
+    - **aura**: 18 field emitters (Ultra Dome, Lightning Rod, Repair
+      Crane, Iron Guard, Disruptor, Chimera Core, Haze Core, Magnetic
+      Beam, Nanocoat Regulator, Spinblade, SODAR, Orcinus, Megaarena and
+      the tech Shield Generator) fire on their own cell. MO made them
+      "attack" a friendly with a 384-cell relay, fired them from a hidden
+      auto superweapon (which the AI only polls every ~110 frames), or
+      from a hidden passenger.
+    - **anti-air**: 13 anti-air units and defences fire their real weapon
+      as Primary instead of hiding it behind a dummy.
+    - **torpedo**: torpedoes are stopped by land.
+    - **pursuit**: 20 contact units (dogs, drones, Ivan, Brute, demo
+      trucks and the like) chase the target instead of its range arc.
+    - **siege-transport**: Centurion, Catastrophe, Battle Tortoise and
+      Nautilus fight at their own range, not their passengers'.
+    - **carrier**: carriers' craft share the carrier's rank, turn back
+      2 cells past its launch range, and launch 10 frames apart.
+    - **dead-zone**: Centurion and Catastrophe fire missiles inside their
+      gun's minimum range.
+    - **gattling**: Cavalier and Paladin keep their escalation between
+      targets; the Cryocopter's freeze restarts per target.
+    - **infiltrator**: disguised infiltrators move at their disguise's
+      speed.
+    - **stack-cap**: Syncronin bonds, Oxidizer marks and Ruiner
+      suppression are capped Phobos effects instead of unlimited Ares
+      stacks; Oxidizers and Ruiners move on to a fresh target.
+    - **jammer**: a disabled transport also silences its passengers.
+    - AI: capital ships may bombard land in range, patrols guard actively
+      (Phobos action 10100), the capital-ship superweapon raid attacks,
+      AI GIs, Guardian GIs and Snipers deploy to fire, and the AI's spare
+      power scales with its drain (`aimo.patch.ini`, `shared.ini`).
+  - Rules in the second wave:
+    - **timer**: objects whose lifetime was an anim damaging them and that
+      nothing else can hurt (Elite Reserves, Kingsnake portal, vision
+      tower, Magnetic Beam, Signal Jammer) die by `AutoDeath` on the frame
+      the anim would have killed them: HP / (Damage x Versus) x
+      (900 // Rate), plus any effect delay (1400, 2730, 1500, 540, 1800
+      frames). The engine advances an anim's damage only on its own frame
+      steps, `900 // Rate` game frames apart (integer division). Objects
+      enemies can damage too (Lightning Rod, Knightfall beacon, tunnels,
+      Disruptor, War Rig) keep MO's decay as part of their durability.
+    - **self-superweapon**: Gear Change, which sent an invisible
+      hunter-seeker only to set off its warhead over its owner's base,
+      fires that warhead at its Industrial Plant on one click
+      (`GenericWarhead` with `SW.UseAITargeting`/`Self`); the AI, which
+      MO barred from it, can now use it.
+    - **upgrade-in-place**: Nanofiber Sync converts the infantry it
+      upgrades (Phobos `ConvertN`) instead of killing them for a death
+      anim to spawn the upgrade, so they keep rank, group, orders and
+      effects and count no loss, and an extra warhead heals them to full
+      as MO's newborns were.
+    - **close-range**: the Cyclops' double damage within 3.5 cells is a
+      second weapon it switches to there (`ForceWeapon.InRange`), with
+      MO's glow via a feedback weapon, instead of a hidden passenger.
+    - **ai-twin**: the Cryocopter's AI copy uses the player's beams; a
+      target filter without empty cells does what the projectile flag
+      that forced the copy did.
+    - **rider**: 21 projectiles that set off a 1-damage effect warhead
+      (Tesla EMP, driver kill, slows, marks, garrison clearing) through an
+      airburst helper weapon carry it as `ExtraWarheads`, landing on the
+      impact point instead of a cluster cell beside it.
+  - Checked in game (skirmish scenes; superweapons charged by a test-only
+    probe layer stacked on `enhance`):
+    - The aura buildings fire with no target (buffs, cloaking, repair 293
+      to 480 HP).
+    - The Patriot downs a Kirov with its Primary.
+    - A Ruiner silences three infantry at once.
+    - Gear Change fires on one click and shuts both factories down.
+    - Nanofiber Sync turns a damaged Knightframe into a Kingsframe at its
+      full 380 HP.
+    - The Cyclops glows while firing its close weapon.
+    - The Tesla EMP sparkles as under MO.
+    - Player and AI Cryocopters both freeze a tank.
+    - The Magnetic Beam vanishes on time.
+  - It changes gameplay, so online games need every player on `enhance`.
 
 ## Known Issues
 
