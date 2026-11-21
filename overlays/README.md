@@ -392,6 +392,36 @@ profile may stop at any layer but never skips one (a contract test checks
       works.
     - **rider** takes helpers of any damage: the Riot Trooper's stun, the
       Rahn's Clairvoyant kill and the Cryocopter's freeze stages.
+  - Rules in the fourth wave:
+    - **demolition**: weapons built to raze buildings (at least 115%
+      against wood and steel: Siege Cadre, Prism Tank, Dolphin, Volkov,
+      Barracuda and the IFV and Scavenger modes that carry them) pick idle
+      enemy buildings in range for players, as they always did for the AI.
+    - **radiation**: a radiation field belongs to the unit that laid it
+      (Desolator, Eradicator, Nuwa Cannon, Reaper), so its kills count for
+      that unit's rank and its owner's score; victims may fire back.
+    - **jammer** also covers EMP: an open-topped transport an EMP shut
+      down silences its passengers too.
+    - **rider** follows chains of helpers that go off on the spot (the
+      Megalodon's wind then blade, the Backwarp's five repair pulses, the
+      Cryocopter's last freeze stage) and takes a helper whose only extra
+      is its weapon's own firing sound (the Suppressor's bomb).
+    - **aura**: the Spinblade's Golden Wind fires its armour buff from an
+      instant shell instead of one dropped from the sky.
+    - **ai-superweapon**: seven superweapons MO kept from the AI (AI
+      targeting `None`) get the targeting MO already gives the same kind
+      of delivery: Instant Shelter and the Repair Drones land at the base
+      centre when it is attacked (as the Disruptor does), the Kingsnake
+      nest at its platform when attacked (as Elite Reserves), the Sweeper
+      drop at the favourite enemy's base (as Tank Drop), naval mines on
+      enemy vessels near the AI's yards (as the MAD Mine), and the Decoy
+      Squadron with the decoy team's script (as Decoy Team). Dropped
+      Sweepers deploy and Repair Drones guard on landing
+      (`AIParadropMission`). Quick Fort (an empty bunker without bunker
+      teams), the Hijackers, Raven, Vision, Zephyr Beacon and Golden Wind
+      stay player-only. Risks the AI accepts: Repair Drones pile up at a
+      base that is often attacked, and a Kingsnake nest hunts the
+      attackers for its lifetime.
   - Checked in game (skirmish scenes; superweapons charged by a test-only
     probe layer stacked on `enhance`):
     - The aura buildings fire with no target (buffs, cloaking, repair 293
@@ -429,6 +459,19 @@ profile may stop at any layer but never skips one (a contract test checks
       played: the iron-curtain targeting (checked in Phobos' source:
       human-owned units skip iron-curtained targets when auto-targeting
       and retaliating) and the carriers' slower promotion (numbers only).
+    - Fourth wave, each against `default`: a Siege Cadre fires at an idle
+      refinery (idle under MO); with its Raccoon beam made an EMP, a
+      Catastrophe's conscript falls silent (it kills three GIs under MO);
+      the Megalodon's blade and the Suppressor's mark land as under MO;
+      one Backwarp heals two Catastrophes from 1% to full, so all five
+      pulses land; Deploy on GIs and an MCV sandbags the GIs and leaves
+      the MCV packed. Not played: radiation credit and the Golden Wind.
+    - With the AI superweapons charged at start (test-only), the AI fires
+      Instant Shelter, the Repair Drone and the Sweeper Drop under
+      `enhance` and none of them under `default`, and `Area Guard` parses.
+      Not seen: the Sweepers deploying (Phobos' own auto-deploy uses the
+      same Unload mission), the Decoy Squadron (its team did not form in
+      time), naval mines (the map has no water) and Kingsnakes (US only).
   - It changes gameplay, so online games need every player on `enhance`.
 
 ## Known Issues
