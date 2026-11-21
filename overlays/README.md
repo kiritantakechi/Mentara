@@ -469,8 +469,11 @@ system they serve, and what they are. Where MO marks a kind by suffix, the
 suffix stays: warheads end in `WH` and elite weapons in `E`. For example
 `PhobosRing24` (selection ring of radius 24), `PhobosUnitHealthTeam`
 (health readout shown to the team), `EnhanceOxidizerMark` (the Oxidizer's
-mark effect), `EnhanceCyclopsCannonClose` / `EnhanceCyclopsCannonCloseE`
-(MO's `CyclopsCannon` at close range) and `EnhanceNanofiberHealWH`. Art IDs
+mark effect), `EnhanceCyclopsClose` / `EnhanceCyclopsCloseE`
+(MO's `CyclopsCannon` at close range) and `EnhanceNanofiberHealWH`. A name
+is at most 24 characters, the length the engine keeps of a type's ID; Ares
+reports a longer one as a fatal error and the truncated type loses its
+section. Art IDs
 of new shapes are the shape's file stem in upper case (`PHRANKV` draws
 `phrankv.shp`), and new AI IDs follow MO's form with the prefix `MNT`
 (`MNTTF01-G`). A house list naming the owner and its allies is `team`.

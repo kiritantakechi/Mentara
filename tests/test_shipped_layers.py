@@ -360,6 +360,27 @@ def test_added_weapons_warheads_and_projectiles_are_listed(depth: int) -> None:
         assert added <= registered, (LAYERS[depth - 1], listed, added - registered)
 
 
+# The engine stores a type's ID in 24 characters. Ares reports a longer
+# section or list entry as a fatal error and keeps it truncated, so the
+# truncated type loses every setting its section gives it.
+_ENGINE_INIS = ("rulesmo", "artmo", "aimo")
+_MAX_TYPE_ID_LENGTH = 24
+
+
+@pytest.mark.parametrize("target", _ENGINE_INIS)
+@pytest.mark.parametrize("layer", LAYERS)
+def test_type_ids_fit_the_engine(layer: str, target: str) -> None:
+    sections = _ini_sections(layer, target)
+    names = sections.keys() | {
+        op.value.casefold()
+        for ops in sections.values()
+        for op in ops
+        if isinstance(op, INIAppend)
+    }
+    too_long = sorted(name for name in names if len(name) > _MAX_TYPE_ID_LENGTH)
+    assert not too_long, (layer, target, too_long)
+
+
 def test_hide_version_warning_matches_the_shipped_phobos_build() -> None:
     # Phobos only honours the flag when it names its own FileVersion,
     # and the flag is repeated in the client patch and in mentara.toml.
