@@ -46,6 +46,19 @@ no Phobos keys, DLLs, or assets. Anything that needs `Phobos.dll` belongs in
       task force.
   - Exact duplicates that change nothing (`FOETF055-G`, `FOETF117-G`,
     `ULTITF60-G`, art `[GAOREFBB]`) are left alone.
+  - Entries that name the wrong thing (fixes 6-8):
+    - "Spy vs Foe Factory" (`SPYFOE03(B)-G`) targeted building 131171,
+      a black fence, instead of 131771, the Foehn war factory (two
+      digits swapped).
+    - The Latin and Chinese garrison task forces `SOVNTF41/42-G` asked
+      for the Russia-only Shock Trooper, so they never filled; both
+      countries build the Tesla Trooper `SHK`.
+    - Two Soviet triggers (`SOVTRI197/199-G`) built the Allied-only
+      Dustdevil and held a team slot until it dissolved; they are off.
+  - **`expandmo99.mix/rulesmo.patch.ini`**: the elite projectile of the
+    Catastrophe, Centurion and Mammoth missiles kept vanilla's
+    anti-air-only flag while every rookie form also hits the ground, so
+    promotion took the ground attack away; it hits both.
   - **`MentaraFixes.dll`** (Syringe hook DLL built from
     `assets/base/MentaraFixes.dll/` by `just assets`; Syringe injects it
     next to Ares): campaigns crashed under
