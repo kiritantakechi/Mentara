@@ -303,13 +303,16 @@ profile may stop at any layer but never skips one (a contract test checks
   - **`expandmo99.mix/artmo.patch.ini`**: art for the rules (the timer
     anims below).
   - Rules in the first wave:
-    - **aura**: 18 field emitters (Ultra Dome, Lightning Rod, Repair
+    - **aura**: 19 field emitters (Ultra Dome, Lightning Rod, Repair
       Crane, Iron Guard, Disruptor, Chimera Core, Haze Core, Magnetic
       Beam, Nanocoat Regulator, Spinblade, SODAR, Orcinus, Megaarena and
-      the tech Shield Generator) fire on their own cell. MO made them
-      "attack" a friendly with a 384-cell relay, fired them from a hidden
-      auto superweapon (which the AI only polls every ~110 frames), or
-      from a hidden passenger.
+      the tech Shield Generator and Expansion Post) fire on their own
+      cell. MO made them "attack" a friendly with a 384-cell relay, fired
+      them from a hidden auto superweapon (which the AI only polls every
+      ~110 frames), or from a hidden passenger. A hidden superweapon fires
+      every building it lists, so all buildings that share one move
+      together: the Expansion Post grants the Repair Crane's, which would
+      otherwise still pulse the Crane on top of its own weapon.
     - **anti-air**: 13 anti-air units and defences fire their real weapon
       as Primary instead of hiding it behind a dummy.
     - **torpedo**: torpedoes are stopped by land.
@@ -375,7 +378,24 @@ profile may stop at any layer but never skips one (a contract test checks
     - The Cyclops glows while firing its close weapon.
     - The Tesla EMP sparkles as under MO.
     - Player and AI Cryocopters both freeze a tank.
-    - The Magnetic Beam vanishes on time.
+    - The Magnetic Beam vanishes on time, and the vision tower and Signal
+      Jammer vanish at the same moment as under MO.
+    - Each scene below was also played under `default`, where MO's
+      behaviour shows:
+      - A Centurion and a Catastrophe kill a tank inside their gun's
+        minimum range with their missiles; under MO they stand idle.
+      - Loaded with conscripts, both engage tanks at 12 and 7 cells on
+        Guard; under MO they never engage.
+      - An elite Quetzal's Seeker drones carry the elite star.
+      - A Catastrophe jammed by a Raccoon goes silent with its passenger;
+        under MO the conscript inside kills three GIs.
+      - With a Repair Crane and an Expansion Post, the Crane superweapon
+        never fires (9 times in the same scene under MO).
+    - Riders land as under MO: Morales kills a tank's driver, and the
+      Blizzard's slow, the Plague Splatter's corrosion, the Raccoon's
+      weapon lock and the Scourge's EMP all apply.
+    - The Syncronin's bond attaches to a barracks.
+    - An eight-AI skirmish runs nine minutes with no error in the log.
   - It changes gameplay, so online games need every player on `enhance`.
 
 ## Known Issues
