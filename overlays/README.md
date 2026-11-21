@@ -254,7 +254,15 @@ profile may stop at any layer but never skips one (a contract test checks
       blitter/lighting/targeting fixes, one share of height lighting for aircraft
       and jumpjets alike, floating income, shadows and wakes,
       combat alerts (unit voices only; MO has no `EVA_UnitsInCombat`), low box
-      selection priority for all 10 harvesters, promotion anims, firing anims
+      selection priority for all 10 harvesters, low deploy priority for the
+      84 vehicles whose Deploy does something (unpack, mode toggle, land,
+      unload or a deploy ability, such as the Demolition Truck's blast), so
+      Deploy on a mixed selection only digs in its infantry, attack-move
+      follow for the 3 pure healers and, once full, the 3 mind controllers
+      with a capacity, the vanilla Guard for the AI's 28 paradropped
+      vehicle types (Phobos 0.5 made them Hunt; MO's Tank Drop, Terror
+      Drop, Bloodhounds and Reinforcement Pad AI was built on Guard),
+      promotion anims, firing anims
       and lasers that follow their unit, turret recoil, and the opt-in
       vanilla fixes
       `DisableOveroptimizationInTargeting`, `AllowWeaponSelectAgainstWalls`,
