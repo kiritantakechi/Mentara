@@ -126,8 +126,8 @@ profile may stop at any layer but never skips one (a contract test checks
       sized to the hull: vehicles and aircraft whose body voxel sweeps past
       the standard ring take one of four larger rings (radius 30, 38, 46
       or 58 px), chosen from half the diagonal of the body's voxel bounds
-      in MO 3.3.6. The 174 assignments are listed at the end of
-      `rulesmo.patch.ini` with the rule that produced them.
+      in MO 3.3.6. The 174 assignments are listed in
+      `rulesmo.patch.ini/technos.ini` with the rule that produced them.
     - Hover readout: `current/max` health in a 3x5 pixel font sitting on
       the health bar (parallel to the diagonal bar on buildings), plus a
       light-blue production percentage beside your own factories.
@@ -166,11 +166,11 @@ profile may stop at any layer but never skips one (a contract test checks
       kick turret and barrel back on each shot; their other weapons
       (missiles, bullets, beams, sprays) leave the turret still. MO marks
       no weapon as a gun, so the shell projectiles are listed in
-      `rulesmo.patch.ini`.
-    - Per-unit and per-weapon settings sit at the end of
-      `rulesmo.patch.ini`, one section per object, with the rule behind
-      each key in the block header; a contract test keeps every patch
-      from updating one section in two places.
+      `rulesmo.patch.ini/technos.ini`.
+    - Per-unit and per-weapon settings sit in `rulesmo.patch.ini/technos.ini`
+      and `weapons.ini`, one section per object, with the rule behind each
+      key at the top of the file; a contract test keeps every patch from
+      updating one section in two places.
     - Decoys: the hover number would tell a decoy (`FakeOf`: fake
       Dominator, Foehn decoy squads, Libra clones and the like, 11
       pairs) from the real thing by its lower health, so decoys and every
@@ -241,9 +241,11 @@ profile may stop at any layer but never skips one (a contract test checks
       super weapon sidebar layout, production bars, tooltips.
     - `artmo.patch.ini`: the promotion anims' art (rate, palette, layer,
       visibility, fade).
-    - `rulesmo.patch.ini`: the HUD above plus modern RTS controls and fixes:
-      building queues, factory tab switching, building type-select,
-      attack-move, `ApproachTarget.StopWhenInRange`, extended aircraft
+    - `rulesmo.patch.ini/` (patch directory): `global.ini` holds the HUD
+      above plus modern RTS controls and fixes, `technos.ini` and
+      `weapons.ini` the per-unit and per-weapon settings. The global
+      settings cover building queues, factory tab switching, building
+      type-select, attack-move, `ApproachTarget.StopWhenInRange`, extended aircraft
       missions, turret tracking, burst recount, jumpjet climb/tilt, fast
       boarding, `SortCameoByName`, `DistributeTargetingFrame`, `ShakeIsLocal`,
       blitter/lighting/targeting fixes, one share of height lighting for aircraft
