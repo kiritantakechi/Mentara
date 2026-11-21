@@ -259,10 +259,7 @@ profile may stop at any layer but never skips one (a contract test checks
       unload or a deploy ability, such as the Demolition Truck's blast), so
       Deploy on a mixed selection only digs in its infantry, attack-move
       follow for the 3 pure healers and, once full, the 3 mind controllers
-      with a capacity, the vanilla Guard for the AI's 28 paradropped
-      vehicle types (Phobos 0.5 made them Hunt; MO's Tank Drop, Terror
-      Drop, Bloodhounds and Reinforcement Pad AI was built on Guard),
-      promotion anims, firing anims
+      with a capacity, promotion anims, firing anims
       and lasers that follow their unit, turret recoil, and the opt-in
       vanilla fixes
       `DisableOveroptimizationInTargeting`, `AllowWeaponSelectAgainstWalls`,
@@ -417,9 +414,11 @@ profile may stop at any layer but never skips one (a contract test checks
       enemy vessels near the AI's yards (as the MAD Mine), and the Decoy
       Squadron with the decoy team's script (as Decoy Team). Dropped
       Sweepers deploy and Repair Drones guard on landing
-      (`AIParadropMission`). Quick Fort (an empty bunker without bunker
-      teams), the Hijackers, Raven, Vision, Zephyr Beacon and Golden Wind
-      stay player-only. Risks the AI accepts: Repair Drones pile up at a
+      (`AIParadropMission`); every other vehicle the AI drops hunts,
+      Phobos 0.5's fix of vanilla leaving them on Guard while its
+      paradropped infantry hunted. Quick Fort (an empty bunker without
+      bunker teams), the Hijackers, Raven, Vision, Zephyr Beacon and
+      Golden Wind stay player-only. Risks the AI accepts: Repair Drones pile up at a
       base that is often attacked, and a Kingsnake nest hunts the
       attackers for its lifetime.
   - Checked in game (skirmish scenes; superweapons charged by a test-only
