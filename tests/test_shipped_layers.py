@@ -238,11 +238,16 @@ def _ini_sections(layer: str, target: str) -> dict[str, tuple[INIKeyOp, ...]]:
     return sections
 
 
+# Mental Omega shapes that a layer's own anim draws again (Image=). The
+# tests cannot open the game's archives, so each was checked in game.
+_REUSED_GAME_SHAPES = frozenset({"nukeball"})
+
+
 @pytest.mark.parametrize("layer", LAYERS)
 def test_registered_animations_ship_their_art(layer: str) -> None:
     # A layer that appends to [Animations] ships the art section and the
-    # shape too; otherwise the type keeps every art default and draws
-    # nothing.
+    # shape too (or reuses a game shape); otherwise the type keeps every
+    # art default and draws nothing.
     registered = [
         operation.value
         for operation in _ini_sections(layer, "rulesmo").get("animations", ())
@@ -263,7 +268,7 @@ def test_registered_animations_ship_their_art(layer: str) -> None:
             ),
             name,
         )
-        assert image.casefold() in shapes, name
+        assert image.casefold() in shapes | _REUSED_GAME_SHAPES, name
 
 
 # Phobos loads a type's settings only if its list names it; a type that

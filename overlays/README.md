@@ -305,6 +305,14 @@ profile may stop at any layer but never skips one (a contract test checks
       to their target again (`MissileSpawnAttackCell=false`). Phobos sent
       them to the cell under it, which moved the blast off infantry's
       sub-cells and onto ground a moving unit had left.
+    - The Nuclear Reactor's death: Phobos detonates a death weapon at
+      once, which skips Ares's `PreImpactAnim`, so the reactor lost its
+      nuke ball, its "nuke intro" sound and big craters before the blast.
+      Its warhead's anim list now starts with a copy of MO's `NUKEBALL`
+      that chains into the blast; the damage still lands at once.
+    - With extended aircraft missions on, an airfield-bound aircraft that
+      has no dock left crashes at once; vanilla crashed it too, but only
+      when it next went idle.
   - **`expandmo50.mix/`**: a new `EXPANDMO%02d.MIX` archive for Phobos-only
     files. It must be an expansion archive: the engine parses CSF tables and
     rules right after the `EXPANDMO` archives load and finds `ECACHE*`/
@@ -361,7 +369,9 @@ profile may stop at any layer but never skips one (a contract test checks
       unload or a deploy ability, such as the Demolition Truck's blast), so
       Deploy on a mixed selection only digs in its infantry, attack-move
       follow for the 3 pure healers and, once full, the 3 mind controllers
-      with a capacity, promotion anims, firing anims
+      with a capacity, attack-move that keeps its cursor when engineers or
+      spies are selected with an army, disguised infantry that allies see
+      blink as their owner does, promotion anims, firing anims
       and lasers that follow their unit, turret recoil, and the opt-in
       vanilla fixes
       `DisableOveroptimizationInTargeting`, `AllowWeaponSelectAgainstWalls`,
