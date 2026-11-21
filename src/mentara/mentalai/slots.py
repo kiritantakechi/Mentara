@@ -18,6 +18,7 @@ __all__ = [
     "AA",
     "AIR",
     "ARTILLERY",
+    "CONTROLLER",
     "DETECTOR",
     "ENGINEER",
     "FAST",
@@ -153,6 +154,18 @@ def _armed_vehicle(unit: Unit) -> bool:
     )
 
 
+# Takes enemy units for the team (`MindControlDecision`): the side's
+# mind controllers, sturdiest for their cost first.
+CONTROLLER: Final[Slot] = Slot(
+    "controller",
+    lambda u: (
+        _ground(u)
+        and u.has(Role.MIND_CONTROL)
+        and not u.roles & (_NON_COMBAT | {Role.HERO})
+    ),
+    lambda u, _t: u.strength / _cost(u),
+    rank=7,
+)
 # A side with no main battle tank at a tier leads with its best armed
 # combat vehicle instead, an armed carrier included.
 _FRONT_FALLBACK: Final[Slot] = Slot("front", _armed_vehicle, _front_score, rank=12)

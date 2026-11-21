@@ -515,6 +515,51 @@ profile may stop at any layer but never skips one (a contract test checks
       Regen and Wonder Drugs, Kinetic Barrier: infantry; Rage,
       Illusion, Chronoboost, Glacial Screen) and casting it before the
       push.
+    - Conduct: every TeamType key the engine reads for AI teams follows
+      the squad's job, from a doctrine per kind of squad, then from its
+      members. Direct lines, sieges and boost assaults drive straight in
+      fighting on the way (`Aggressive`, no `AvoidThreats`); flanks route
+      round the defences (`AvoidThreats`) and target only the chosen
+      enemy (`OnlyTargetHouseEnemy`); hunting lines close ranks when
+      harassed on the move (`Annoyance`); raids slip past fights to
+      their target (not `Aggressive`, `AvoidThreats`); spies, engineers
+      and hijackers ignore damage and keep going (`Suicide`) and stay out
+      of other teams; engineer drops send their transport home after
+      unloading (`TransportsReturnOnUnload`, with vanilla load 14, which
+      saves its place); guards and the base watch close ranks and refill
+      when worn to a third (`Reinforce`). `Priority` orders who may take
+      members from whom: the MCV 10, superweapon assaults 8, counters 7,
+      agents 6, lines 5, raids 4, guards and feints 3, garrisons 2. A
+      squad with slow and fast members gathers on the slow ones
+      (`GuardSlower`), and one with mind controllers keeps the units it
+      takes (`MindControlDecision`: join the team, or hunt for guards).
+      `Loadable`, `Full`, `Whiner`, `LooseRecruit` and `Prebuild` stay
+      off: AI teams are created empty and filled by production, so the
+      engine never reads them.
+    - Unpredictability: Phobos 16003 skips the next line with a chance,
+      and when that line is a vanilla jump over a block, the block runs
+      with that chance; each team rolls for itself (the game's synced
+      random, the same on every machine). A direct line gathers again
+      nearer the base half the time (Ares 53 with a negative distance),
+      fights at the gathering point or rushes, and strikes the factories
+      or the power first (a power cut takes the defences off line) before
+      the defences; a flank circles to the far power plants or the far
+      buildings and hits power or factories first; sieges sometimes shell
+      the power first; raids, feints, air strikes and navies take their
+      targets in an order they roll.
+    - Two teams at once: a trigger's Team2 starts in the same frame, so
+      a **pincer** sends a direct line and a flank together, **feint and
+      strike** a line and a feint that pulls the defence off it, and an
+      **escorted siege** a siege behind a hunting line, beside the line
+      and siege with air support.
+    - Opportunities: when the chosen enemy drains more power than it
+      makes (condition 3) its defences are off line, and a **blackout
+      assault** (a line with a blitz or a feint) goes in at high weight;
+      when it is down to 500 credits (condition 4) a **finishing hunt**
+      goes after what it has left, with an economy raid.
+    - Mind controllers: tier-2 and tier-3 lines take the side's mind
+      controllers (Yuri clones, Yuri Prime, the Mastermind), and keep
+      what they take.
     - Turnover: attack and counter squads recruit idle units of their
       types anywhere (`Recruiter`), so survivors refill them before the
       factories do; members of an ended base-defence team rejoin the
@@ -596,6 +641,13 @@ profile may stop at any layer but never skips one (a contract test checks
       Airfield-bound strike craft are lost and raised again often
       (about 40 teams of two per tier in nine minutes) but no longer
       abandoned. Still not played: the navy (no water on the map).
+    - With the per-role conduct, random branches and two-team calls (same
+      four AIs): the scripts ran with no unknown action, every family
+      formed, and the casts fired (Overcharge 12, Drakuv 9, Irradiate 8,
+      Iron Curtain 6, five Curtain Charges). PsiCorps lost its yard
+      twice and fell by minute four, so its controllers were not seen
+      fighting; the others' guards refilled instead of being raised
+      again (15 base-watch teams against 49).
   - Rules in the first wave:
     - **aura**: 19 field emitters (Ultra Dome, Lightning Rod, Repair
       Crane, Iron Guard, Disruptor, Chimera Core, Haze Core, Magnetic
@@ -917,11 +969,12 @@ numbers its IDs with four digits, family then tier or variant
 (`MNTTF0102RU-G` is Russia's tier-2 line, with team `MNTTT0102RU-G` and
 trigger `MNTTR0102RU-G`): 01-03 lines (direct, flank, hunt), 04 line
 with air, 05-06 siege, 07-11 blitz, feint, economy, power and stealth
-raids, 13 air strike, 15 base watch, 16 patrol, 17 tech guard, 18 sky
-guard, 19 superweapon snipe, 20-25 capture, garrison, bunkers, bio
-reactor, hijack, 26 spies, 27 engineer drops, 30-32 navy, 35
-Chronosphere, 36 Iron Curtain, 37 boost assaults, 50-59 counter
-triggers, 60-89 counter squads, 99 MCV. Scripts are numbered by kind
+raids, 12 pincer, 13 air strike, 14 feint and strike, 15 base watch, 16
+patrol, 17 tech guard, 18 sky guard, 19 superweapon snipe, 20-25
+capture, garrison, bunkers, bio reactor, hijack, 26 spies, 27 engineer
+drops, 30-32 navy, 34 escorted siege, 35 Chronosphere, 36 Iron
+Curtain, 37 boost assaults, 38 blackout assault, 39 finishing hunt,
+50-59 counter triggers, 60-89 counter squads, 99 MCV. Scripts are numbered by kind
 (`MNTSC1000-G`), with the country code when they cast that country's
 superweapons (`MNTSC1000RU-G`). Their names take the
 country's label where MO's name has the side's ("Last Bastion - Condor

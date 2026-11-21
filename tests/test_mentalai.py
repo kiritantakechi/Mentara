@@ -14,7 +14,7 @@ from mentara.mentalai.emit import (
 )
 from mentara.mentalai.generate import AI_FRAGMENT, OPTION_FRAGMENT
 from mentara.mentalai.ini import split_list
-from mentara.mentalai.model import Comparison, Condition
+from mentara.mentalai.model import Comparison, Condition, MindControl
 
 # One side with one country. Its yard unlocks a barracks and a war
 # factory (tier 1), a radar (tech level 5, tier 2) and labs (tech level
@@ -100,6 +100,8 @@ NumberOfDocks=4
 0=GI
 1=MEDIC
 2=HERO
+3=PSI
+4=ENG
 
 [VehicleTypes]
 0=TANK
@@ -160,6 +162,22 @@ Cost=200
 Strength=125
 Occupier=yes
 Primary=Rifle
+
+[ENG]
+TechLevel=1
+Owner=Alpha
+Prerequisite=PILE
+Engineer=yes
+Cost=500
+Strength=75
+
+[PSI]
+TechLevel=5
+Owner=Alpha
+Prerequisite=PILE,RADR
+Cost=1000
+Strength=150
+Primary=Control
 
 [MEDIC]
 TechLevel=1
@@ -238,6 +256,17 @@ ROF=20
 Range=5
 Projectile=Bullet
 Warhead=SA
+
+[Control]
+Damage=1
+ROF=60
+Range=6
+Projectile=Bullet
+Warhead=Psi
+
+[Psi]
+MindControl=yes
+Verses=100%,100%,100%,100%,100%,100%,0%,0%,0%,0%,0%
 
 [Heal]
 Damage=-50
@@ -478,6 +507,58 @@ def test_occupiers_garrison_buildings(rules: IniData) -> None:
     plan = plan_ai(build_catalog(rules))
     garrison = {tf.id: tf for tf in plan.task_forces}["MNTTF2100AL-G"]
     assert garrison.members == ((5, "GI"),)
+
+
+def test_each_kind_of_team_behaves_to_its_job(rules: IniData) -> None:
+    plan = plan_ai(build_catalog(rules))
+    teams = {t.id: t.conduct for t in plan.teams}
+    direct, flank = teams["MNTTT0102AL-G"], teams["MNTTT0202AL-G"]
+    # The direct line drives in; the flank routes round the defences.
+    assert direct.aggressive
+    assert not direct.avoid_threats
+    assert flank.avoid_threats
+    assert flank.enemy_only
+    engineers = teams["MNTTT2000AL-G"]
+    assert engineers.suicide
+    assert not engineers.recruitable
+    watch = teams["MNTTT1501AL-G"]
+    assert watch.base_defense
+    assert watch.reinforce
+    assert watch.annoyance
+    assert teams["MNTTT9900AL-G"].priority > teams["MNTTT0101AL-G"].priority
+
+
+def test_a_mind_controller_keeps_what_it_takes(rules: IniData) -> None:
+    plan = plan_ai(build_catalog(rules))
+    members = {tf.id: tf.members for tf in plan.task_forces}
+    assert (2, "PSI") in members["MNTTF0102AL-G"]
+    conduct = {t.id: t.conduct for t in plan.teams}["MNTTT0102AL-G"]
+    assert conduct.mind_control is MindControl.JOIN_TEAM
+    raid = {t.id: t.conduct for t in plan.teams}["MNTTT0901AL-G"]
+    assert raid.mind_control is MindControl.DONT_CARE
+
+
+def test_random_branches_jump_past_their_blocks(rules: IniData) -> None:
+    # Phobos 16003 skips the vanilla jump after it with a chance, so the
+    # block between runs with that chance; the jump must land past it.
+    for script in plan_ai(build_catalog(rules)).scripts:
+        lines = script.lines
+        for index, (action, _chance) in enumerate(lines):
+            if action != 16003:
+                continue
+            jump, target = lines[index + 1]
+            if jump != 6:
+                continue
+            assert index + 2 < target <= len(lines)
+
+
+def test_two_team_calls_pair_their_teams(rules: IniData) -> None:
+    triggers = {t.id: t for t in plan_ai(build_catalog(rules)).triggers}
+    pincer = triggers["MNTTR1202AL-G"]
+    assert (pincer.team, pincer.support) == ("MNTTT0102AL-G", "MNTTT0202AL-G")
+    blackout = triggers["MNTTR3802AL-G"]
+    assert blackout.gate.condition is Condition.ENEMY_POWER_SHORT
+    assert blackout.support == "MNTTT0702AL-G"
 
 
 ENHANCE = Path(__file__).resolve().parents[1] / "overlays" / "enhance"

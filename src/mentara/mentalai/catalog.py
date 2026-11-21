@@ -71,6 +71,7 @@ class Role(StrEnum):
     OCCUPIER = "occupier"
     HIJACKER = "hijacker"
     STEALTH = "stealth"
+    MIND_CONTROL = "mind-control"
 
 
 # The engine's base armour classes, in the order `Verses=` lists them.
@@ -482,6 +483,13 @@ class _Reader:
             (_yes(rules.get(name, "Occupier")), Role.OCCUPIER),
             (_yes(rules.get(name, "VehicleThief")), Role.HIJACKER),
             (_yes(rules.get(name, "Cloakable")), Role.STEALTH),
+            (
+                any(
+                    _yes(rules.get(weapon.warhead, "MindControl"))
+                    for weapon in self._weapons(name)
+                ),
+                Role.MIND_CONTROL,
+            ),
             (
                 bool(rules.get(name, "DeploysInto"))
                 and not self._deploys_into_yard(name),

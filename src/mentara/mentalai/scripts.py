@@ -15,7 +15,7 @@ How a team fights, from the Phobos v0.5-alpha2 and YR sources:
   test.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
 __all__ = [
@@ -85,12 +85,13 @@ _P_ATTACK: Final[int] = 10000
 _P_ATTACK_ONCE: Final[int] = 10001
 _P_ATTACK_LIST_THREAT: Final[int] = 10012
 _P_ATTACK_FARTHER: Final[int] = 10005
+_LOAD: Final[int] = 14
 _P_MOVE_ENEMY: Final[int] = 10050
 _P_MOVE_ENEMY_FARTHER: Final[int] = 10056
 _P_MOVE_FRIENDLY: Final[int] = 10053
 _P_AREA_GUARD: Final[int] = 10100
-_P_LOAD: Final[int] = 10103
 _P_MOVE_DISTANCE: Final[int] = 12001
+_P_MOVE_END: Final[int] = 12002
 _P_REWARD: Final[int] = 14000
 _P_TIMEOUT: Final[int] = 16001
 _P_TIMEOUT_STOP: Final[int] = 16002
@@ -129,6 +130,11 @@ _REWARD: Final[int] = 10
 _FLANK_DISTANCE: Final[int] = 6
 _DROP_DISTANCE: Final[int] = 4
 _UNLOAD_KEEP_PASSENGERS: Final[int] = 2  # lose transports, keep units
+# Ares: 53,n gathers n cells nearer the enemy's base than its safe
+# distance when negative.
+_CLOSER: Final[int] = -10
+_CLOSER_TIMEOUT: Final[int] = 60
+_FLANK_ALL_ARRIVE: Final[int] = 2  # Phobos 12002: every member arrives
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,135 +190,217 @@ def _casts(groups: tuple[int, ...]) -> Lines:
     )
 
 
-def _staged(casts: tuple[int, ...], *push: tuple[int, int]) -> Lines:
-    """Conscript, stage near the enemy base, fight there, cast, push."""
+@dataclass(slots=True)
+class _Draft:
+    """A script under construction, with random branches.
+
+    Phobos 16003 skips the next line with a chance; when that line is a
+    vanilla jump over a block, the block runs with that chance. Each
+    team rolls for itself (`ScenarioClass::Random`, the same on every
+    machine), so no two waves need take the same road.
+    """
+
+    lines: list[tuple[int, int]] = field(default_factory=list)
+
+    def then(self, *lines: tuple[int, int]) -> _Draft:
+        self.lines.extend(lines)
+        return self
+
+    def maybe(self, percent: int, *block: tuple[int, int]) -> _Draft:
+        """Run a block with a chance in percent."""
+        after = len(self.lines) + 2 + len(block)
+        self.lines.extend(((_P_SKIP_CHANCE, percent), (_JUMP, after + 1), *block))
+        return self
+
+    def either(self, percent: int, first: Lines, second: Lines) -> _Draft:
+        """Run `first` with a chance in percent, else `second`."""
+        second_at = len(self.lines) + 2 + len(first) + 1
+        end = second_at + len(second)
+        self.lines.extend(
+            (
+                (_P_SKIP_CHANCE, percent),
+                (_JUMP, second_at + 1),
+                *first,
+                (_JUMP, end + 1),
+                *second,
+            )
+        )
+        return self
+
+    def done(self) -> Lines:
+        return tuple(self.lines)
+
+
+def _timed(seconds: int, *lines: tuple[int, int]) -> Lines:
+    """Lines that end after a time at most (Phobos 16001, 16002)."""
+    return ((_P_TIMEOUT, seconds), *lines, (_P_TIMEOUT_STOP, 0))
+
+
+def _stage(*, closer: int) -> _Draft:
+    """Conscript, then gather outside the enemy base.
+
+    With a chance in percent the team gathers again, nearer: waves do
+    not all stop at the same line.
+    """
     return (
-        (_REGROUP_AT_BASE, 0),
-        (_P_TIMEOUT, _STAGE_TIMEOUT),
-        (_GATHER_AT_ENEMY, 0),
-        (_P_TIMEOUT_STOP, 0),
-        (_P_AREA_GUARD, _STAGE_FIGHT),
-        *_casts(casts),
-        *push,
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
+        _Draft()
+        .then((_REGROUP_AT_BASE, 0), *_timed(_STAGE_TIMEOUT, (_GATHER_AT_ENEMY, 0)))
+        .maybe(closer, *_timed(_CLOSER_TIMEOUT, (_GATHER_AT_ENEMY, _CLOSER)))
     )
 
 
+def _finish() -> Lines:
+    return ((_SUCCESS, 0), (_ATTACK, ANYTHING))
+
+
 def line_direct(casts: tuple[int, ...]) -> Lines:
-    """Stage, then break the defences and raze the base."""
-    return _staged(
-        casts,
-        (_ATTACK, DEFENSES),
-        (_P_AREA_GUARD, _PUSH_PAUSE),
-        (_ATTACK, STRUCTURES),
+    """Stage, then break the defences and raze the base.
+
+    Each wave rolls its own approach: how near it gathers, whether it
+    fights at the gathering point or rushes, and whether it strikes the
+    factories or the power first (a power cut takes the defences off
+    line) before the defences.
+    """
+    return (
+        _stage(closer=50)
+        .maybe(70, (_P_AREA_GUARD, _STAGE_FIGHT))
+        .then(*_casts(casts))
+        .maybe(35, (_ATTACK, FACTORIES))
+        .maybe(35, (_ATTACK, POWER))
+        .then(
+            (_ATTACK, DEFENSES),
+            (_P_AREA_GUARD, _PUSH_PAUSE),
+            (_ATTACK, STRUCTURES),
+            *_finish(),
+        )
+        .done()
     )
 
 
 def line_flank(casts: tuple[int, ...]) -> Lines:
     """Circle to the far side of the chosen enemy's base, hit it there.
 
-    Phobos's move to the farthest enemy structure (`10056`, by
-    distance) takes the team round the base; the team only targets its
-    house's chosen enemy, so the far structure is that enemy's.
+    Phobos's move to the farthest enemy building of a class (`10056`, by
+    distance) takes the team round the base, all members arriving
+    together; the team only targets its house's chosen enemy, so the
+    far building is that enemy's. The team rolls which class it circles
+    to (power plants or any building) and what it hits first.
     """
+
+    def circle(target: int) -> Lines:
+        return (
+            (_P_MOVE_DISTANCE, _FLANK_DISTANCE),
+            (_P_MOVE_END, _FLANK_ALL_ARRIVE),
+            *_timed(_FLANK_TIMEOUT, (_P_MOVE_ENEMY_FARTHER, target)),
+        )
+
     return (
-        (_REGROUP_AT_BASE, 0),
-        (_P_MOVE_DISTANCE, _FLANK_DISTANCE),
-        (_P_TIMEOUT, _FLANK_TIMEOUT),
-        (_P_MOVE_ENEMY_FARTHER, T_STRUCTURES),
-        (_P_TIMEOUT_STOP, 0),
-        (_P_AREA_GUARD, _STAGE_FIGHT),
-        *_casts(casts),
-        (_ATTACK, STRUCTURES),
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
+        _Draft()
+        .then((_REGROUP_AT_BASE, 0))
+        .either(50, circle(T_POWER), circle(T_STRUCTURES))
+        .maybe(70, (_P_AREA_GUARD, _STAGE_FIGHT))
+        .then(*_casts(casts))
+        .either(50, ((_ATTACK, POWER),), ((_ATTACK, FACTORIES),))
+        .then((_ATTACK, STRUCTURES), *_finish())
+        .done()
     )
 
 
 def line_hunt(casts: tuple[int, ...]) -> Lines:
     """Stage, then hunt the enemy army; members pick their targets."""
-    return (
-        (_REGROUP_AT_BASE, 0),
-        (_P_TIMEOUT, _STAGE_TIMEOUT),
-        (_GATHER_AT_ENEMY, 0),
-        (_P_TIMEOUT_STOP, 0),
-        *_casts(casts),
-        (_MISSION, _HUNT),
-    )
+    return _stage(closer=50).then(*_casts(casts), (_MISSION, _HUNT)).done()
 
 
 def siege(casts: tuple[int, ...]) -> Lines:
-    """Stage, then outrange the defences and level the base."""
-    return _staged(casts, (_ATTACK, DEFENSES), (_ATTACK, STRUCTURES))
+    """Stage, then outrange the defences and level the base.
+
+    Some sieges shell the power first, to take the defences off line.
+    """
+    return (
+        _stage(closer=0)
+        .maybe(60, (_P_AREA_GUARD, _STAGE_FIGHT))
+        .then(*_casts(casts))
+        .maybe(40, (_ATTACK, POWER))
+        .then((_ATTACK, DEFENSES), (_ATTACK, STRUCTURES), *_finish())
+        .done()
+    )
 
 
 def superweapon_snipe(casts: tuple[int, ...]) -> Lines:
     """Stage, then destroy the enemy's superweapons first."""
-    return _staged(
-        casts,
-        (_P_REWARD, _REWARD * 2),
-        (_P_ATTACK_ONCE, T_SUPERWEAPON),
-        (_P_ATTACK_ONCE, T_SUPERWEAPON),
-        (_ATTACK, STRUCTURES),
+    return (
+        _stage(closer=50)
+        .then(
+            *_casts(casts),
+            (_P_REWARD, _REWARD * 2),
+            (_P_ATTACK_ONCE, T_SUPERWEAPON),
+            (_P_ATTACK_ONCE, T_SUPERWEAPON),
+            (_ATTACK, STRUCTURES),
+            *_finish(),
+        )
+        .done()
     )
+
+
+def _either_order(
+    percent: int, first: tuple[int, int], second: tuple[int, int]
+) -> _Draft:
+    """Two targets in either order, the first first with a chance."""
+    return _Draft().either(percent, (first, second), (second, first))
 
 
 def blitz() -> Lines:
     """Fast units straight at the factories, then the yard."""
     return (
-        (_REGROUP_AT_BASE, 0),
-        (_P_ATTACK, T_VEHICLE_FACTORY),
-        (_P_ATTACK, T_BARRACKS),
-        (_P_ATTACK, T_CONSTRUCTION_YARD),
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
+        _Draft()
+        .then((_REGROUP_AT_BASE, 0))
+        .then(
+            *_either_order(
+                50, (_P_ATTACK, T_VEHICLE_FACTORY), (_P_ATTACK, T_BARRACKS)
+            ).lines
+        )
+        .then((_P_ATTACK, T_CONSTRUCTION_YARD), *_finish())
+        .done()
     )
 
 
 def feint() -> Lines:
     """Draw the defence off: hit the enemy's farthest buildings."""
     return (
-        (_P_ATTACK_FARTHER, T_STRUCTURES),
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
+        _Draft()
+        .then((_REGROUP_AT_BASE, 0))
+        .either(
+            50,
+            ((_P_ATTACK_FARTHER, T_POWER),),
+            ((_P_ATTACK_FARTHER, T_STRUCTURES),),
+        )
+        .then(*_finish())
+        .done()
     )
 
 
 def economy_raid() -> Lines:
-    """Harvesters first, then refineries and purifiers."""
-    return (
-        (_REGROUP_AT_BASE, 0),
-        (_P_ATTACK, T_ORE_MINERS),
-        (_P_ATTACK, T_ECONOMY),
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
-    )
+    """Harvesters and refineries, in an order each raid rolls."""
+    order = _either_order(60, (_P_ATTACK, T_ORE_MINERS), (_P_ATTACK, T_ECONOMY))
+    return _Draft().then((_REGROUP_AT_BASE, 0), *order.lines, *_finish()).done()
 
 
 def power_raid() -> Lines:
-    """Black out the base: power plants, then radar."""
-    return (
-        (_REGROUP_AT_BASE, 0),
-        (_P_ATTACK, T_POWER),
-        (_P_ATTACK, T_RADAR),
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
-    )
+    """Black out the base: power plants and radar, in either order."""
+    order = _either_order(60, (_P_ATTACK, T_POWER), (_P_ATTACK, T_RADAR))
+    return _Draft().then((_REGROUP_AT_BASE, 0), *order.lines, *_finish()).done()
 
 
-def air_strike(*quarries: int) -> Lines:
-    """Vanilla quarries, as MO's own air teams use.
+def air_strike(first: int, second: int) -> Lines:
+    """Two vanilla quarries, in an order each strike rolls.
 
-    A Phobos attack line found no target for Comanches in a probe game
-    and the team hovered in place. Vanilla `0,q` repeats until the
-    class is gone, and the engine sends the craft to rearm and back.
+    Vanilla quarries, as MO's own air teams use: a Phobos attack line
+    found no target for Comanches in a probe game and the team hovered
+    in place. Vanilla `0,q` repeats until the class is gone, and the
+    engine sends the craft to rearm and back.
     """
-    return (
-        *((_ATTACK, quarry) for quarry in quarries),
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
-    )
+    order = _either_order(65, (_ATTACK, first), (_ATTACK, second))
+    return _Draft().then(*order.lines, *_finish()).done()
 
 
 def watch(casts: tuple[int, ...]) -> Lines:
@@ -374,11 +462,12 @@ def infiltrate(target: int) -> Lines:
 def drop(target: int) -> Lines:
     """Load agents into the team's transport, drive in, unload, enter.
 
-    Phobos 10103 seats the passengers in the team's own transports;
-    vanilla 8,2 unloads and lets the transport leave the team.
+    Vanilla 14 seats the passengers and saves the transport's place, so
+    with `TransportsReturnOnUnload` vanilla 8,2 sends the empty
+    transport home to serve again (Phobos 10103 saves no place).
     """
     return (
-        (_P_LOAD, 0),
+        (_LOAD, 0),
         (_P_MOVE_DISTANCE, _DROP_DISTANCE),
         (_P_TIMEOUT, _DROP_TIMEOUT),
         (_P_MOVE_ENEMY, target),
@@ -483,12 +572,13 @@ def counter_hunt(target_list: int) -> Lines:
 
 
 def naval_line() -> Lines:
-    """Stage at sea, then ships, defences and the shore."""
-    return _staged(
-        (),
-        (_P_ATTACK, T_NAVAL_UNITS),
-        (_P_ATTACK, T_DEFENSES),
-        (_ATTACK, STRUCTURES),
+    """Stage at sea; ships and defences in either order; the shore."""
+    order = _either_order(60, (_P_ATTACK, T_NAVAL_UNITS), (_P_ATTACK, T_DEFENSES))
+    return (
+        _stage(closer=0)
+        .maybe(70, (_P_AREA_GUARD, _STAGE_FIGHT))
+        .then(*order.lines, (_ATTACK, STRUCTURES), *_finish())
+        .done()
     )
 
 

@@ -11,7 +11,9 @@ __all__ = [
     "Call",
     "Comparison",
     "Condition",
+    "Conduct",
     "Gate",
+    "MindControl",
     "Squad",
     "TaskForce",
     "TeamType",
@@ -25,6 +27,10 @@ class Condition(IntEnum):
     ALWAYS = -1
     ENEMY_OWNS = 0
     HOUSE_OWNS = 1
+    # The house's chosen enemy makes less power than it drains.
+    ENEMY_POWER_SHORT = 3
+    # The chosen enemy's credits, against the comparator.
+    ENEMY_CREDITS = 4
     IRON_CURTAIN_CHARGED = 5
     CHRONOSPHERE_CHARGED = 6
 
@@ -34,6 +40,67 @@ class Comparison(IntEnum):
 
     LESS = 0
     AT_LEAST = 3
+
+
+class MindControl(IntEnum):
+    """What a team does with units its members mind-control.
+
+    `MindControlDecision`, in YR's order (as ModEnc documents it).
+    """
+
+    DONT_CARE = 0
+    JOIN_TEAM = 1
+    GRIND = 2
+    BIO_REACTOR = 3
+    HUNT = 4
+    NOTHING = 5
+
+
+@dataclass(frozen=True, slots=True)
+class Conduct:
+    """How a team behaves: the TeamType keys the engine reads for it.
+
+    `Loadable`, `Full`, `Whiner`, `LooseRecruit` and `Prebuild` have no
+    effect on teams the AI's triggers raise (gamemd: AI teams are
+    created empty and filled by production and recruiting), so they are
+    not choices here.
+
+    Attributes:
+        priority: A team of higher priority may take members from one
+            of lower priority.
+        aggressive: Members look for targets while moving and fight on
+            (attack-move for vanilla moves).
+        avoid_threats: Pathfinding routes round known threats.
+        recruiter: The team takes idle units of its types from anywhere,
+            so survivors fill it before the factories do.
+        enemy_only: Phobos lines target only the house's chosen enemy.
+        suicide: The team ignores damage and members never retaliate.
+        annoyance: Hit on the move by something other than its target,
+            the team stops and regroups.
+        reinforce: At a third of its strength the team stops, regroups
+            and recruits replacements.
+        guard_slower: Slow members count double in the team's centre,
+            so it gathers where they are.
+        base_defense: A base-defence team (capped apart).
+        recruitable: Members may join other teams once theirs ends.
+        transports_return: Transports released by vanilla 8 drive back
+            to where vanilla 14 loaded them.
+        mind_control: What to do with units members mind-control.
+    """
+
+    priority: int = 5
+    aggressive: bool = True
+    avoid_threats: bool = False
+    recruiter: bool = False
+    enemy_only: bool = False
+    suicide: bool = False
+    annoyance: bool = False
+    reinforce: bool = False
+    guard_slower: bool = False
+    base_defense: bool = False
+    recruitable: bool = True
+    transports_return: bool = False
+    mind_control: MindControl = MindControl.DONT_CARE
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,13 +130,8 @@ class Squad:
         members: Count and unit ID per member type.
         script: Its script.
         ranks: Each member's `LeadershipRating`.
+        conduct: How the team behaves.
         max_teams: How many may exist at once (`Max`).
-        priority: Recruiting priority; a higher one may take members.
-        base_defense: Whether it is a base-defence team.
-        recruiter: Whether it takes idle units of its types from
-            anywhere, so survivors fill it before the factories do.
-        enemy_only: Whether its Phobos lines target only the house's
-            chosen enemy.
         unique: Members the AI must not clone.
     """
 
@@ -78,11 +140,8 @@ class Squad:
     members: tuple[tuple[int, str], ...]
     script: Script
     ranks: Mapping[str, int]
+    conduct: Conduct
     max_teams: int = 2
-    priority: int = 5
-    base_defense: bool = False
-    recruiter: bool = False
-    enemy_only: bool = False
     unique: frozenset[str] = field(default_factory=frozenset)
 
 
@@ -132,11 +191,7 @@ class TeamType:
         task_force: Its TaskForce ID.
         script: Its ScriptType ID.
         max_teams: How many may exist at once per house (`Max`).
-        priority: Recruiting priority.
-        base_defense: Whether it is a base-defence team.
-        recruitable: Whether its members may join other teams later.
-        recruiter: Whether it takes idle units from anywhere.
-        enemy_only: Whether it targets only the house's chosen enemy.
+        conduct: How the team behaves.
     """
 
     id: str
@@ -144,11 +199,7 @@ class TeamType:
     task_force: str
     script: str
     max_teams: int
-    priority: int
-    base_defense: bool
-    recruitable: bool
-    recruiter: bool
-    enemy_only: bool
+    conduct: Conduct
 
 
 @dataclass(frozen=True, slots=True)

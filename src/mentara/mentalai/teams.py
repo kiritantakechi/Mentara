@@ -116,11 +116,7 @@ class _Builder:
             task_force=task_force.id,
             script=self._add_script(squad.script),
             max_teams=squad.max_teams,
-            priority=squad.priority,
-            base_defense=squad.base_defense,
-            recruitable=not squad.base_defense,
-            recruiter=squad.recruiter,
-            enemy_only=squad.enemy_only,
+            conduct=squad.conduct,
         )
         self._task_forces.append(task_force)
         self._teams.append(team)
@@ -158,7 +154,7 @@ class _Builder:
                 side=country.side,
                 gate=call.gate,
                 weight=call.weight,
-                base_defense=team.base_defense,
+                base_defense=team.conduct.base_defense,
             )
         )
 

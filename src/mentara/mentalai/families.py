@@ -10,17 +10,26 @@ Numbers are four digits, the family and then the tier or variant
 """
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final
 
 from mentara.mentalai import scripts as sc
 from mentara.mentalai.catalog import Catalog, Country, Factory, Kind, Role, Unit
-from mentara.mentalai.model import Call, Comparison, Condition, Gate, Squad
+from mentara.mentalai.model import (
+    Call,
+    Comparison,
+    Condition,
+    Conduct,
+    Gate,
+    MindControl,
+    Squad,
+)
 from mentara.mentalai.scripts import Lines, Script, make_script
 from mentara.mentalai.slots import (
     AA,
     AIR,
     ARTILLERY,
+    CONTROLLER,
     DETECTOR,
     ENGINEER,
     FAST,
@@ -248,30 +257,89 @@ def _script(country: Country, code: int, name: str, lines: Lines) -> Script:
     return make_script(code, f"Mental {name}", lines, country_code(country))
 
 
-def _squad(  # noqa: PLR0913 - every squad flag has its own family
+# --- Doctrines --------------------------------------------------------
+#
+# How each kind of squad behaves. A squad's members then adjust it: a
+# mind controller decides what becomes of the units it takes, and slow
+# members among fast ones draw the team's gathering point to them.
+
+# Drives straight in, fighting on the way.
+_ASSAULT: Final[Conduct] = Conduct(recruiter=True, mind_control=MindControl.JOIN_TEAM)
+# Routes round the defences to the far side of the chosen enemy.
+_FLANK: Final[Conduct] = replace(_ASSAULT, avoid_threats=True, enemy_only=True)
+# Hunts the army; harassed on the way, it closes ranks first.
+_HUNTER: Final[Conduct] = replace(_ASSAULT, annoyance=True)
+# Slips past fights to its target.
+_RAID: Final[Conduct] = Conduct(
+    priority=4, aggressive=False, avoid_threats=True, recruiter=True
+)
+# Makes itself seen at the chosen enemy's far side.
+_FEINT: Final[Conduct] = Conduct(priority=3, enemy_only=True)
+# Answers a threat the enemy fielded: urgent, so it may take members
+# from lesser teams, and it hunts only the chosen enemy's units.
+_COUNTER: Final[Conduct] = replace(_ASSAULT, priority=7, enemy_only=True)
+# A superweapon is charged now: the team may take members from any.
+_TIMED: Final[Conduct] = replace(_ASSAULT, priority=8)
+# Goes for one building and nothing else; its members belong to it.
+_AGENT: Final[Conduct] = Conduct(
+    priority=6,
+    aggressive=False,
+    avoid_threats=True,
+    suicide=True,
+    recruitable=False,
+)
+# Drives agents in by transport and sends the transport home.
+_DROP: Final[Conduct] = replace(_AGENT, transports_return=True)
+# Walks into a building of its own side or a civilian one.
+_OCCUPY: Final[Conduct] = Conduct(
+    priority=2, aggressive=False, avoid_threats=True, suicide=True
+)
+# Holds ground: closes ranks when harassed, refills when worn down,
+# and sends the units it takes after the enemy.
+_GUARD: Final[Conduct] = Conduct(
+    priority=3,
+    annoyance=True,
+    reinforce=True,
+    mind_control=MindControl.HUNT,
+)
+_WATCH: Final[Conduct] = replace(_GUARD, base_defense=True, recruitable=False)
+_SORTIE: Final[Conduct] = Conduct(aggressive=False, avoid_threats=True)
+_NAVY: Final[Conduct] = _ASSAULT
+_YARD: Final[Conduct] = Conduct(
+    priority=10, aggressive=False, avoid_threats=True, suicide=True
+)
+# The engine counts a member slow at this speed or below.
+_SLOW_SPEED: Final[float] = 5.0
+
+
+def _squad(  # noqa: PLR0913 - a squad is all of these
+    ctx: Context,
     number: int,
     label: str,
     filled: Filled,
     script: Script,
     *,
+    conduct: Conduct,
     max_teams: int = 2,
-    base_defense: bool = False,
-    recruiter: bool = False,
-    enemy_only: bool = False,
-    priority: int = 5,
+    unique: frozenset[str] = frozenset(),
 ) -> Squad:
     members, ranks = filled
+    units = [ctx.catalog.units[unit.lower()] for _, unit in members]
+    controls = any(u.has(Role.MIND_CONTROL) for u in units)
+    slow = [u.speed <= _SLOW_SPEED for u in units]
     return Squad(
         number=number,
         label=label,
         members=members,
         script=script,
         ranks=ranks,
+        conduct=replace(
+            conduct,
+            mind_control=conduct.mind_control if controls else MindControl.DONT_CARE,
+            guard_slower=any(slow) and not all(slow),
+        ),
         max_teams=max_teams,
-        priority=priority,
-        base_defense=base_defense,
-        recruiter=recruiter,
-        enemy_only=enemy_only,
+        unique=unique,
     )
 
 
@@ -296,6 +364,7 @@ _LINE_SLOTS: Final[dict[int, _Slots]] = {
         (SCREEN, 2),
         (AA, 2),
         (SUPPORT, 1),
+        (CONTROLLER, 2),
         (DETECTOR, 1),
     ),
     3: (
@@ -305,6 +374,7 @@ _LINE_SLOTS: Final[dict[int, _Slots]] = {
         (SCREEN, 2),
         (AA, 2),
         (SUPPORT, 1),
+        (CONTROLLER, 1),
     ),
 }
 # Direct, flank and hunt lines share members; each has its own weight.
@@ -313,9 +383,15 @@ _LINE_KINDS: Final[tuple[tuple[int, str, int, tuple[int, int, int]], ...]] = (
     (2, "Flank", 1100, (50, 60, 80)),
     (3, "Hunt", 1200, (40, 50, 60)),
 )
+_LINE_CONDUCT: Final[dict[int, Conduct]] = {1: _ASSAULT, 2: _FLANK, 3: _HUNTER}
 _LINE_AIR: Final[int] = 4
 _LINE_AIR_WEIGHTS: Final[tuple[int, int, int]] = (0, 50, 60)
 _AIR: Final[int] = 13
+_PINCER: Final[int] = 12
+_PINCER_WEIGHTS: Final[tuple[int, int, int]] = (30, 40, 50)
+_FEINT_STRIKE: Final[int] = 14
+_FEINT_STRIKE_WEIGHT: Final[int] = 35
+_FEINT_CODE: Final[int] = 8
 
 
 def lines(ctx: Context, country: Country) -> Iterator[Order]:
@@ -341,13 +417,13 @@ def lines(ctx: Context, country: Country) -> Iterator[Order]:
             number = code * 100 + tier
             script = _script(country, script_code, kind, builders[code](casts))
             yield _squad(
+                ctx,
                 number,
                 f"{kind} T{tier}",
                 filled,
                 script,
+                conduct=_LINE_CONDUCT[code],
                 max_teams=3,
-                recruiter=True,
-                enemy_only=code == 2,  # noqa: PLR2004 - the flank
             )
             yield Call(number, f"{kind} T{tier}", number, gate, weights[tier - 1])
         if _LINE_AIR_WEIGHTS[tier - 1]:
@@ -359,10 +435,30 @@ def lines(ctx: Context, country: Country) -> Iterator[Order]:
                 _LINE_AIR_WEIGHTS[tier - 1],
                 support=_AIR * 100 + tier,
             )
+        # Two teams in the same frame: a pincer (a direct line and a
+        # flank), and a feint that pulls the defence away from a line.
+        yield Call(
+            _PINCER * 100 + tier,
+            f"Pincer T{tier}",
+            100 + tier,
+            gate,
+            _PINCER_WEIGHTS[tier - 1],
+            support=200 + tier,
+        )
+        yield Call(
+            _FEINT_STRIKE * 100 + tier,
+            f"Feint and Strike T{tier}",
+            100 + tier,
+            gate,
+            _FEINT_STRIKE_WEIGHT,
+            support=_FEINT_CODE * 100 + tier,
+        )
 
 
 _SIEGE: Final[int] = 5
 _SIEGE_AIR: Final[int] = 6
+_SIEGE_ESCORT: Final[int] = 34
+_HUNT: Final[int] = 3
 
 
 def sieges(ctx: Context, country: Country) -> Iterator[Order]:
@@ -375,7 +471,7 @@ def sieges(ctx: Context, country: Country) -> Iterator[Order]:
             continue
         number = _SIEGE * 100 + tier
         script = _script(country, 2000, "Siege", sc.siege(country.front_casts))
-        yield _squad(number, f"Siege T{tier}", filled, script, recruiter=True)
+        yield _squad(ctx, number, f"Siege T{tier}", filled, script, conduct=_ASSAULT)
         yield Call(number, f"Siege T{tier}", number, gate, 70)
         yield Call(
             _SIEGE_AIR * 100 + tier,
@@ -384,6 +480,15 @@ def sieges(ctx: Context, country: Country) -> Iterator[Order]:
             gate,
             40,
             support=_AIR * 100 + tier,
+        )
+        # The siege's guns behind a hunting line that meets the army.
+        yield Call(
+            _SIEGE_ESCORT * 100 + tier,
+            f"Escorted Siege T{tier}",
+            number,
+            gate,
+            35,
+            support=_HUNT * 100 + tier,
         )
 
 
@@ -396,7 +501,7 @@ def superweapon_snipes(ctx: Context, country: Country) -> Iterator[Order]:
     script = _script(
         country, 2100, "Superweapon Snipe", sc.superweapon_snipe(country.front_casts)
     )
-    yield _squad(1900, "Superweapon Snipe", filled, script, recruiter=True)
+    yield _squad(ctx, 1900, "Superweapon Snipe", filled, script, conduct=_COUNTER)
     for index, building in enumerate(ctx.superweapon_buildings):
         gate = Gate(Condition.ENEMY_OWNS, building, 1, Comparison.AT_LEAST)
         yield Call(1900 + index + 1, f"Snipe {building}", 1900, gate, 60)
@@ -404,12 +509,14 @@ def superweapon_snipes(ctx: Context, country: Country) -> Iterator[Order]:
 
 # --- Raids and feints ------------------------------------------------
 
-_RAIDS: Final[tuple[tuple[int, str, int, _Slots, tuple[int, ...], int, bool], ...]] = (
-    (7, "Blitz", 3000, ((STRIKER, 4), (FAST, 2)), (2, 3), 40, False),
-    (8, "Feint", 3100, ((FAST, 4),), (1, 2), 30, True),
-    (9, "Economy Raid", 3200, ((RAIDER, 4),), (1, 2), 40, False),
-    (10, "Power Raid", 3300, ((STRIKER, 3), (FAST, 2)), (2, 3), 30, False),
-    (11, "Stealth Raid", 3400, ((STEALTH, 4),), (1, 2, 3), 30, False),
+_RAIDS: Final[
+    tuple[tuple[int, str, int, _Slots, tuple[int, ...], int, Conduct], ...]
+] = (
+    (7, "Blitz", 3000, ((STRIKER, 4), (FAST, 2)), (2, 3), 40, _RAID),
+    (8, "Feint", 3100, ((FAST, 4),), (1, 2), 30, _FEINT),
+    (9, "Economy Raid", 3200, ((RAIDER, 4),), (1, 2), 40, _RAID),
+    (10, "Power Raid", 3300, ((STRIKER, 3), (FAST, 2)), (2, 3), 30, _RAID),
+    (11, "Stealth Raid", 3400, ((STEALTH, 4),), (1, 2, 3), 30, _RAID),
 )
 _RAID_SCRIPTS: Final[dict[int, Callable[[], Lines]]] = {
     7: sc.blitz,
@@ -426,7 +533,7 @@ def raids(ctx: Context, country: Country) -> Iterator[Order]:
     A feint hits the chosen enemy's farthest buildings to pull the
     defence away from the lines; raids hit the economy and the power.
     """
-    for code, name, script_code, slots, tiers, weight, enemy_only in _RAIDS:
+    for code, name, script_code, slots, tiers, weight, conduct in _RAIDS:
         script = _script(country, script_code, name, _RAID_SCRIPTS[code]())
         for tier in tiers:
             gate = _tier_gate(country, tier)
@@ -435,12 +542,7 @@ def raids(ctx: Context, country: Country) -> Iterator[Order]:
                 continue
             number = code * 100 + tier
             yield _squad(
-                number,
-                f"{name} T{tier}",
-                filled,
-                script,
-                recruiter=True,
-                enemy_only=enemy_only,
+                ctx, number, f"{name} T{tier}", filled, script, conduct=conduct
             )
             yield Call(number, f"{name} T{tier}", number, gate, weight)
 
@@ -488,13 +590,13 @@ def air_strikes(ctx: Context, country: Country) -> Iterator[Order]:
             code, f"Mental Air Strike vs {aim}", sc.air_strike(*quarries), ""
         )
         number = _AIR * 100 + tier
-        squad = _squad(number, f"Air Strike T{tier}", (members, ranks), script)
-        yield Squad(
-            number=squad.number,
-            label=squad.label,
-            members=squad.members,
-            script=squad.script,
-            ranks=squad.ranks,
+        yield _squad(
+            ctx,
+            number,
+            f"Air Strike T{tier}",
+            (members, ranks),
+            script,
+            conduct=_SORTIE,
             max_teams=max_teams,
             unique=unique,
         )
@@ -518,7 +620,7 @@ def defense(ctx: Context, country: Country) -> Iterator[Order]:
         if gate is None or filled is None:
             continue
         number = 1500 + tier
-        yield _squad(number, f"Base Watch T{tier}", filled, watch, base_defense=True)
+        yield _squad(ctx, number, f"Base Watch T{tier}", filled, watch, conduct=_WATCH)
         yield Call(number, f"Base Watch T{tier}", number, gate, 60)
     upper = _unlock_gate(country, 2)
     mid = ctx.fielded(country, 2)
@@ -531,19 +633,22 @@ def defense(ctx: Context, country: Country) -> Iterator[Order]:
         if upper is None or filled is None:
             continue
         script = _script(country, code, name, script_lines)
-        yield _squad(number, name, filled, script, max_teams=1)
+        yield _squad(ctx, number, name, filled, script, conduct=_GUARD, max_teams=1)
         yield Call(number, name, number, upper, weight)
     filled = fill(((SKY_GUARD, 4), (SCREEN, 1)), mid, 2, required=("sky guard",))
     if filled is None:
         return
     guard = _script(country, 5200, "Sky Guard", sc.watch(()))
-    yield _squad(1800, "Sky Guard", filled, guard)
+    yield _squad(ctx, 1800, "Sky Guard", filled, guard, conduct=_GUARD)
     for index, building in enumerate(ctx.airfields):
         gate = Gate(Condition.ENEMY_OWNS, building, 1, Comparison.AT_LEAST)
         yield Call(1800 + index + 1, f"Sky Guard vs {building}", 1800, gate, 40)
 
 
 # --- Occupation ------------------------------------------------------
+
+
+_CAPTURE: Final[int] = 2000
 
 
 def occupation(ctx: Context, country: Country) -> Iterator[Order]:
@@ -602,7 +707,8 @@ def occupation(ctx: Context, country: Country) -> Iterator[Order]:
         if gate is None or filled is None:
             continue
         script = _script(country, code, name, script_lines)
-        yield _squad(number, name, filled, script, max_teams=1)
+        conduct = _AGENT if number == _CAPTURE else _OCCUPY
+        yield _squad(ctx, number, name, filled, script, conduct=conduct, max_teams=1)
         yield Call(number, name, number, gate, weight)
     yield from _agents(
         ctx,
@@ -636,7 +742,7 @@ def _agents(  # noqa: PLR0913 - one squad and call per agent kind
     if gate is None:
         return
     script = _script(country, code, name, script_lines)
-    yield _squad(number, name, filled, script, max_teams=1)
+    yield _squad(ctx, number, name, filled, script, conduct=_AGENT, max_teams=1)
     yield Call(number, name, number, gate, weight)
 
 
@@ -682,7 +788,8 @@ def infiltration(ctx: Context, country: Country) -> Iterator[Order]:
     for index, (target, name) in enumerate(_DROP_TARGETS, start=1):
         number = 2700 + index
         script = _script(country, 7100 + target, f"Drop vs {name}", sc.drop(target))
-        yield _squad(number, f"Engineer Drop vs {name}", filled, script, max_teams=1)
+        label = f"Engineer Drop vs {name}"
+        yield _squad(ctx, number, label, filled, script, conduct=_DROP, max_teams=1)
         yield Call(number, f"Engineer Drop vs {name}", number, gate, 10)
 
 
@@ -745,7 +852,7 @@ def naval(ctx: Context, country: Country) -> Iterator[Order]:
             if gate is None or filled is None:
                 continue
             number = code * 100 + tier
-            yield _squad(number, f"{name} T{tier}", filled, script)
+            yield _squad(ctx, number, f"{name} T{tier}", filled, script, conduct=_NAVY)
             yield Call(number, f"{name} T{tier}", number, gate, weight)
 
 
@@ -776,7 +883,9 @@ def superweapon_assaults(ctx: Context, country: Country) -> Iterator[Order]:
             lines_ = sc.chrono_assault(quarry, casts)
             script = _script(country, 8100 + quarry, f"Chrono vs {name}", lines_)
             label = f"Chrono Assault vs {name}"
-            yield _squad(number, label, filled, script, max_teams=1)
+            yield _squad(
+                ctx, number, label, filled, script, conduct=_TIMED, max_teams=1
+            )
             gate = Gate(Condition.CHRONOSPHERE_CHARGED)
             yield Call(number, label, number, gate, 80)
     curtain = country.curtain
@@ -786,7 +895,9 @@ def superweapon_assaults(ctx: Context, country: Country) -> Iterator[Order]:
             script = _script(
                 country, 8200, "Curtain Charge", sc.curtain_charge(curtain, casts)
             )
-            yield _squad(3600, "Curtain Charge", filled, script, max_teams=1)
+            yield _squad(
+                ctx, 3600, "Curtain Charge", filled, script, conduct=_TIMED, max_teams=1
+            )
             gate = Gate(Condition.IRON_CURTAIN_CHARGED)
             yield Call(3600, "Curtain Charge", 3600, gate, 150)
     yield from _boosts(ctx, country)
@@ -808,7 +919,7 @@ def _boosts(ctx: Context, country: Country) -> Iterator[Order]:
         name = f"{_strip(cast.name)} Assault"
         script = _script(country, 8300 + cast.group, name, sc.line_direct(order))
         number = 3700 + cast.group
-        yield _squad(number, name, filled, script, recruiter=True)
+        yield _squad(ctx, number, name, filled, script, conduct=_ASSAULT)
         yield Call(number, name, number, _owns(cast.building), 70)
 
 
@@ -869,7 +980,48 @@ def _counter_squad(
             "",
         )
     label = f"Counter {key.armor}{' air' if key.airborne else ''} T{tier}"
-    return _squad(number, label, filled, script, recruiter=True)
+    return _squad(ctx, number, label, filled, script, conduct=_COUNTER)
+
+
+# --- Opportunities ---------------------------------------------------
+
+# An enemy this short of credits cannot rebuild what it loses.
+_BROKE_CREDITS: Final[int] = 500
+_BLACKOUT: Final[int] = 38
+_FINISH: Final[int] = 39
+_BLITZ: Final[int] = 7
+
+
+def opportunities(ctx: Context, country: Country) -> Iterator[Order]:
+    """Strike when the chosen enemy is weak, whatever the tier.
+
+    When it drains more power than it makes, its defences are off
+    line: a line goes in with a factory blitz beside it. When it is
+    nearly out of credits, hunting lines go after what it has left. The
+    squads are the country's own lines, blitzes and raids; a call whose
+    squad the country lacks is dropped.
+    """
+    del ctx
+    del country
+    blackout = Gate(Condition.ENEMY_POWER_SHORT)
+    broke = Gate(Condition.ENEMY_CREDITS, "<none>", _BROKE_CREDITS, Comparison.LESS)
+    for tier in (1, 2):
+        yield Call(
+            _BLACKOUT * 100 + tier,
+            f"Blackout Assault T{tier}",
+            100 + tier,
+            blackout,
+            150,
+            support=_BLITZ * 100 + tier if tier > 1 else _FEINT_CODE * 100 + tier,
+        )
+        yield Call(
+            _FINISH * 100 + tier,
+            f"Finishing Hunt T{tier}",
+            _HUNT * 100 + tier,
+            broke,
+            100,
+            support=900 + tier,
+        )
 
 
 # --- The yard --------------------------------------------------------
@@ -877,12 +1029,11 @@ def _counter_squad(
 
 def redeploy(ctx: Context, country: Country) -> Iterator[Order]:
     """A new MCV when the construction yard is lost."""
-    del ctx
     if not country.mcv or not country.construction_yard:
         return
     script = _script(country, 8000, "Redeploy MCV", sc.redeploy())
     filled: Filled = (((1, country.mcv),), {country.mcv: 1})
-    yield _squad(9900, "Redeploy MCV", filled, script, max_teams=1, priority=10)
+    yield _squad(ctx, 9900, "Redeploy MCV", filled, script, conduct=_YARD, max_teams=1)
     gate = Gate(Condition.HOUSE_OWNS, country.construction_yard, 1, Comparison.LESS)
     yield Call(9900, "Redeploy MCV", 9900, gate, 500)
 
@@ -899,5 +1050,6 @@ FAMILIES: Final[tuple[Family, ...]] = (
     naval,
     superweapon_assaults,
     counters,
+    opportunities,
     redeploy,
 )
