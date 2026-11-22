@@ -7,6 +7,7 @@ carrier and each charger, and last a strike group for whatever no
 squad has taken.
 """
 
+from dataclasses import dataclass
 from typing import Final
 lazy from collections.abc import Iterator, Mapping
 
@@ -21,6 +22,7 @@ from mentara.mentalai.families._kit import (
     OTHER_JOBS,
     RAID,
     SORTIE,
+    TOP,
     Aim,
     Context,
     Course,
@@ -29,9 +31,11 @@ from mentara.mentalai.families._kit import (
     aim_of,
     alone,
     from_tier,
+    harm,
     on_call,
     roster,
     squadron,
+    unlocked,
 )
 from mentara.mentalai.families.assault import DIRECT, HUNTING
 from mentara.mentalai.families.defense import SKY_WATCH
@@ -49,11 +53,13 @@ from mentara.mentalai.slots import (
     ANY_HERO,
     BOMBER,
     FRONT,
+    HERO,
     INFANTRY,
     SCREEN,
     Seats,
     fill,
 )
+lazy from mentara.mentalai.catalog import Firepower
 
 
 def _flies_to_fight(unit: Unit) -> bool:
@@ -154,9 +160,19 @@ def heroes(ctx: Context, country: Country) -> Iterator[Order]:
 _DEPLOYER_RANK: Final[int] = 2
 
 
+# A unit's emplacement at home is numbered this far past its forward
+# one.
+_EMPLACE_PLACE: Final[int] = 50
+
+
 def deployers(ctx: Context, country: Country) -> Iterator[Order]:
-    """Units that unfold into something deploy by the enemy base."""
-    script = Script(8500, "Forward Deploy", sc.forward_deploy())
+    """Units that unfold into something deploy at the enemy's gate.
+
+    And, less often, beside the house's own defences, as MO's own AI
+    dug its Irritators and Sweepers in.
+    """
+    forward = Script(8500, "Forward Deploy", sc.forward_deploy())
+    home = Script(8510, "Emplace", sc.emplace())
     for index, (unit, tier) in enumerate(
         roster(ctx, country, _ground_deployer), start=1
     ):
@@ -169,10 +185,19 @@ def deployers(ctx: Context, country: Country) -> Iterator[Order]:
             Series.DEPLOYER.at(index),
             f"Forward {unit.id}",
             (Member(count, unit, _DEPLOYER_RANK), *escort),
-            script,
+            forward,
             ASSAULT,
         )
         yield from on_call(squad, gate, 25)
+        squad = Squad(
+            Series.DEPLOYER.at(_EMPLACE_PLACE + index),
+            f"Emplace {unit.id}",
+            alone(unit, count),
+            home,
+            BEELINE,
+            max_teams=1,
+        )
+        yield from on_call(squad, gate, 10)
 
 
 _BOMB_COURSES: Final[Mapping[Aim, Course]] = frozendict(
@@ -216,40 +241,135 @@ def bombers(ctx: Context, country: Country) -> Iterator[Order]:
 _CARRIERS: Final[int] = 4
 # A carrier takes this many riders at most, however many it seats.
 _RIDERS_MAX: Final[int] = 2
+# The classes a rider is chosen for, the first the carrier's main crew.
+_RIDER_AIMS: Final[tuple[Aim, ...]] = (Aim.VEHICLES, Aim.INFANTRY, Aim.BUILDINGS)
+# Weights: the main crew, each other crew, a mixed one, a hero's. A
+# carrier's crews together weigh about what its one crew did: more
+# kinds of mounted line, not more of them.
+_MOUNT_WEIGHT: Final[int] = 20
+_OTHER_MOUNT_WEIGHT: Final[int] = 12
+_MIXED_MOUNT_WEIGHT: Final[int] = 12
+_HERO_MOUNT_WEIGHT: Final[int] = 10
+# A carrier's squads are numbered ten apart, nine to a carrier.
+_MOUNT_STEP: Final[int] = 10
+_MOUNTS_MAX: Final[int] = 9
+
+
+def _aboard(carrier: Unit, rider: Unit) -> Firepower:
+    """What a rider fights with aboard a carrier.
+
+    The weapon it gives a gunner vehicle (the vehicle's first where it
+    has none for the rider); from inside an open-topped carrier, what
+    its own weapons reach; on foot beside a closed one, all it has.
+    """
+    if carrier.has(Role.GUNNER):
+        return carrier.mounts.get(rider.seat_mode) or carrier.firepower
+    return rider.ranged if carrier.has(Role.OPEN_TOPPED) else rider.firepower
+
+
+def _room(carrier: Unit, rider: Unit) -> int:
+    """How many of a rider one carrier takes, the cap on riders kept."""
+    return min(carrier.passengers // max(rider.size, 1), _RIDERS_MAX)
+
+
+@dataclass(frozen=True, slots=True)
+class _Mount:
+    """A carrier's crew of riders, and how often it is raised."""
+
+    riders: tuple[tuple[int, Unit, int], ...]
+    weight: int
+    max_teams: int = 2
+
+    @property
+    def label(self) -> str:
+        """The riders' names, as the squad's name carries them."""
+        return "+".join(unit.id for _, unit, _ in self.riders)
+
+
+def _mounts(
+    ctx: Context, country: Country, carrier: Unit, tier: int
+) -> Iterator[_Mount]:
+    """The crews a carrier rides out with, the main one first.
+
+    At each tier from the carrier's own, the rider that hurts each class
+    of target most aboard; then, where a carrier seats two, the first
+    two of them side by side; and last the hero that does most aboard,
+    with the main crew in the other carriers. MO's own AI seated a
+    dozen kinds of infantry in an IFV, mixed crews in a Battle Fortress
+    and its heroes in both.
+    """
+    fits = [u for u in ctx.fielded(country, TOP) if 0 < u.size <= carrier.size_limit]
+    crews: list[Unit] = []
+    for at in range(tier, TOP + 1):
+        fielded = {u.id for u in ctx.fielded(country, at)}
+        riders = [u for u in fits if u.id in fielded and INFANTRY.fits(u)]
+        for aim in _RIDER_AIMS:
+            best = max(
+                riders,
+                key=lambda u: (harm(_aboard(carrier, u), aim), -u.cost, u.id),
+                default=None,
+            )
+            if (
+                best is not None
+                and best not in crews
+                and harm(_aboard(carrier, best), aim) > 0
+                and _room(carrier, best) > 0
+            ):
+                crews.append(best)
+    for place, rider in enumerate(crews):
+        seats = _CARRIERS * _room(carrier, rider)
+        weight = _OTHER_MOUNT_WEIGHT if place else _MOUNT_WEIGHT
+        yield _Mount(((seats, rider, SCREEN.rank),), weight)
+    if not crews:
+        return
+    first = crews[0]
+    if len(crews) > 1 and min(_room(carrier, u) for u in crews[:2]) > 1:
+        half = _CARRIERS * _RIDERS_MAX // 2
+        pair = tuple((half, unit, SCREEN.rank) for unit in crews[:2])
+        yield _Mount(pair, _MIXED_MOUNT_WEIGHT)
+    heroes = [u for u in fits if HERO.fits(u) and _room(carrier, u) > 0]
+    hero = max(
+        heroes,
+        key=lambda u: (sum(harm(_aboard(carrier, u), aim) for aim in Aim), u.id),
+        default=None,
+    )
+    escort = _CARRIERS * _room(carrier, first) - 1
+    if hero is not None and escort > 0:
+        riders = ((1, hero, HERO.rank), (escort, first, SCREEN.rank))
+        yield _Mount(riders, _HERO_MOUNT_WEIGHT, max_teams=1)
 
 
 def carriers(ctx: Context, country: Country) -> Iterator[Order]:
-    """Each armed carrier rides out with the infantry that fit it best.
+    """Each armed carrier rides out with the infantry that suit it.
 
-    An IFV fights with its passenger's weapon, an open-topped carrier
-    lets its squad fire from inside: MO's IFV and carrier combinations.
-    The carriers lead as a front line does.
+    An IFV fights with its passenger's weapon and an open-topped carrier
+    lets its squad fire from inside, so their riders stay aboard; any
+    other carrier sets its riders down at the enemy's gate and fights
+    beside them. The carriers lead as a front line does.
     """
-    script = Script(8700, "Mounted Line", sc.mounted(country.front_casts))
+    casts = country.front_casts
+    aboard = Script(8700, "Mounted Line", sc.mounted(casts))
+    on_foot = Script(8710, "Mechanised Line", sc.mechanised(casts))
     for index, (unit, tier) in enumerate(roster(ctx, country, _armed_carrier), start=1):
-        gate = from_tier(country, tier)
-        infantry = tuple(
-            u
-            for u in ctx.fielded(country, tier)
-            if u.kind is Kind.INFANTRY and u.size <= unit.size_limit
-        )
-        riders = fill(((SCREEN, 1),), infantry, tier) or fill(
-            ((INFANTRY, 1),), infantry, tier
-        )
-        if gate is None or riders is None:
-            continue
-        seats = _CARRIERS * min(unit.passengers, _RIDERS_MAX)
-        squad = Squad(
-            Series.CARRIER.at(index),
-            f"Mounted {unit.id}",
-            (
+        stays = bool(unit.roles & {Role.GUNNER, Role.OPEN_TOPPED})
+        mounts = tuple(_mounts(ctx, country, unit, tier))[:_MOUNTS_MAX]
+        for place, mount in enumerate(mounts, start=1):
+            crew = (
                 Member(_CARRIERS, unit, FRONT.rank),
-                Member(seats, riders[-1].unit, SCREEN.rank),
-            ),
-            script,
-            ASSAULT,
-        )
-        yield from on_call(squad, gate, 40)
+                *(Member(count, rider, rank) for count, rider, rank in mount.riders),
+            )
+            gate = unlocked(country, crew)
+            if gate is None:
+                continue
+            squad = Squad(
+                Series.CARRIER.at(_MOUNT_STEP * index + place),
+                f"Mounted {unit.id} {mount.label}",
+                crew,
+                aboard if stays else on_foot,
+                ASSAULT,
+                max_teams=mount.max_teams,
+            )
+            yield from on_call(squad, gate, mount.weight)
 
 
 _CHARGE_COURSES: Final[Mapping[Aim, Course]] = frozendict(

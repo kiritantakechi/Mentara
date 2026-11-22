@@ -28,6 +28,7 @@ keeps a steady weight.
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Final, Protocol
+lazy from collections.abc import Mapping
 
 __all__ = [
     "Line",
@@ -49,6 +50,7 @@ __all__ = [
     "decapitate",
     "drop",
     "economy_raid",
+    "emplace",
     "feint",
     "forward_deploy",
     "garrison",
@@ -57,20 +59,22 @@ __all__ = [
     "line_direct",
     "line_flank",
     "line_hunt",
+    "mechanised",
     "mounted",
     "naval_bombard",
     "naval_hunt",
     "naval_line",
     "occupy_bunker",
     "patrol",
+    "post",
     "power_raid",
     "redeploy",
+    "rush",
     "siege",
     "stand_guard",
     "strike_drop",
     "superweapon_snipe",
     "tank_bunker",
-    "tech_guard",
     "watch",
 ]
 
@@ -154,6 +158,7 @@ class _Action(IntEnum):
 _ONCE: Final[int] = 1
 _HUNT_MISSION: Final[int] = 15
 _UNLOAD_KEEP_PASSENGERS: Final[int] = 2  # lose transports, keep units
+_UNLOAD_KEEP_ALL: Final[int] = 0  # transports and units stay in the team
 # Vanilla 46 and 47 take a building type's index, and in the high word
 # which of the enemy's to choose: this is the nearest.
 _NEAREST: Final[int] = 2 << 16
@@ -188,6 +193,7 @@ _DROP_DISTANCE: Final[int] = 4
 # distance when negative.
 _CLOSER: Final[int] = -10
 _AGENT_TRIES: Final[int] = 3
+_CERTAIN: Final[int] = 100
 _SPY_SKIP_PERCENT: Final[int] = 30
 _REWARD: Final[int] = 10
 
@@ -233,6 +239,7 @@ _DEPLOY: Final[Line] = (_Action.DEPLOY, 0)
 _LOAD: Final[Line] = (_Action.LOAD, 0)
 _BOARD: Final[Line] = (_Action.BOARD, 0)
 _UNLOAD: Final[Line] = (_Action.UNLOAD, _UNLOAD_KEEP_PASSENGERS)
+_DISMOUNT: Final[Line] = (_Action.UNLOAD, _UNLOAD_KEEP_ALL)
 _ALL_MUST_ARRIVE: Final[Line] = (_Action.MOVE_END, _ALL_ARRIVE)
 _TAKE_VEHICLES: Final[Line] = (_Action.TAKE_VEHICLES, 0)
 
@@ -342,9 +349,14 @@ class _Draft:
         return self
 
     def maybe(self, percent: int, *block: Line) -> _Draft:
-        """Run a block with a chance in percent; none leaves it out."""
+        """Run a block with a chance in percent.
+
+        No chance leaves the block out, and a certain one the roll.
+        """
         if percent <= 0:
             return self
+        if percent >= _CERTAIN:
+            return self.then(*block)
         after = len(self.lines) + 2 + len(block)
         return self.then(
             (_Action.SKIP_CHANCE, percent),
@@ -526,6 +538,22 @@ def mounted(casts: tuple[int, ...]) -> Lines:
         .gather(closer=50)
         .maybe(70, _guard(_STAGE_FIGHT))
         .then(*_casts(casts), *_push())
+        .done()
+    )
+
+
+def mechanised(casts: tuple[int, ...]) -> Lines:
+    """Ride to the enemy's gate, get out, fight beside the carriers.
+
+    For carriers whose passengers cannot fire from inside: vanilla 8,0
+    sets them down at the nearer gathering point and keeps carriers and
+    passengers in the team.
+    """
+    return (
+        _Draft()
+        .then(_REGROUP, _BOARD)
+        .gather(closer=_CERTAIN)
+        .then(_DISMOUNT, *_casts(casts), *_push())
         .done()
     )
 
@@ -740,9 +768,22 @@ def patrol() -> Lines:
     )
 
 
-def tech_guard() -> Lines:
-    """Hold the tech buildings the house has taken."""
-    return ((_Action.MOVE_TO_OWN, Target.TECH), _guard(_WATCH), _jump(1))
+def post(target: Target) -> Lines:
+    """Stand by the house's nearest building of a class, for good.
+
+    MO's own AI kept most of its defenders this way, beside its
+    turrets; a house with none of the class yet holds where it is.
+    """
+    return ((_Action.MOVE_TO_OWN, target), _guard(_WATCH), _jump(1))
+
+
+def emplace() -> Lines:
+    """Deploy beside the house's own defences (vanilla 9).
+
+    For units that unfold into a turret or a minefield: MO's own AI
+    dug its Irritators and Sweepers in at home. Deployed is done.
+    """
+    return ((_Action.MOVE_TO_OWN, Target.DEFENSES), _DEPLOY, _SUCCESS)
 
 
 def garrison() -> Lines:
@@ -798,22 +839,55 @@ def infiltrate(target: Target) -> Lines:
     return _tries(*_timed(_AGENT_TIMEOUT, wait, _strike(target, once=True)))
 
 
-def drop(target: Target) -> Lines:
-    """Load agents into the team's transport, drive in, unload, enter.
+def _ride(target: Target) -> Lines:
+    """Load the team's transport, ride in beside a class of building.
 
     Vanilla 14 seats the passengers and saves the transport's place, so
     with `TransportsReturnOnUnload` vanilla 8,2 sends the empty
-    transport home to serve again (Phobos 10103 saves no place). The
-    agents on the ground by their target are the success: one that
-    gets in is spent.
+    transport home to serve again (Phobos 10103 saves no place).
     """
     return (
         _LOAD,
         (_Action.MOVE_DISTANCE, _DROP_DISTANCE),
         *_timed(_AGENT_TIMEOUT, (_Action.MOVE_TO_ENEMY, target)),
         _UNLOAD,
-        _SUCCESS,
-        _strike(target, once=True),
+    )
+
+
+def drop(target: Target) -> Lines:
+    """Agents ride in beside a class of building and enter it.
+
+    The agents on the ground by their target are the success: one that
+    gets in is spent.
+    """
+    return (*_ride(target), _SUCCESS, _strike(target, once=True))
+
+
+# The vanilla quarry that holds a class of building a transport rides
+# to: a construction yard is a factory to the engine.
+_QUARRY_AT: Final[Mapping[Target, Quarry]] = frozendict(
+    {
+        Target.POWER: Quarry.POWER,
+        Target.FACTORIES: Quarry.FACTORIES,
+        Target.CONSTRUCTION_YARD: Quarry.FACTORIES,
+    }
+)
+
+
+def rush(target: Target) -> Lines:
+    """Fighters ride in beside a class of building and wreck it.
+
+    MO's own Borillo, Armadillo and Driller rushes, and its saboteurs
+    by Stallion. Out of the transport they take vanilla quarries:
+    Phobos would pick their targets with the weapon of the transport
+    that brought them and has left. Alive when the class is gone or the
+    clock runs out is the success.
+    """
+    return (
+        *_ride(target),
+        *_proven(_RAID_PROOF, _attack(_QUARRY_AT[target])),
+        _attack(Quarry.STRUCTURES),
+        *_MOP_UP,
     )
 
 

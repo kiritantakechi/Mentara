@@ -15,6 +15,7 @@ from mentara.mentalai.emit import (
     render_rules_fragment,
 )
 from mentara.mentalai.generate import AI_FRAGMENT, OPTION_FRAGMENT
+from mentara.mentalai.handling import stand_offs
 from mentara.mentalai.ini import split_list
 from mentara.mentalai.model import (
     Comparison,
@@ -146,6 +147,7 @@ NumberOfDocks=4
 4=ENG
 5=SAPPER
 6=SPY
+7=BAZ
 
 [VehicleTypes]
 0=TANK
@@ -162,6 +164,8 @@ NumberOfDocks=4
 11=BOMB
 12=BOAT
 13=SUB
+14=IFV
+15=APC
 
 [SuperWeaponTypes]
 0=CurtainSW
@@ -306,6 +310,43 @@ Strength=125
 Occupier=yes
 Primary=Rifle
 
+; Anti-armour infantry: in an IFV's seat it fits the cannon.
+[BAZ]
+TechLevel=1
+Owner=Alpha
+Prerequisite=PILE
+Cost=300
+Strength=100
+Primary=Bazooka
+IFVMode=1
+
+; Takes its weapon from its passenger: the rifle, or the cannon.
+[IFV]
+TechLevel=2
+Owner=Alpha
+Prerequisite=ANYWEAP
+Passengers=1
+SizeLimit=1
+Gunner=yes
+WeaponCount=2
+Weapon1=Rifle
+Weapon2=Cannon
+Cost=600
+Strength=200
+Armor=light
+
+; A closed carrier: its passengers fight on foot.
+[APC]
+TechLevel=2
+Owner=Alpha
+Prerequisite=ANYWEAP
+Passengers=3
+SizeLimit=1
+Cost=500
+Strength=300
+Armor=light
+Primary=Rifle
+
 ; Plants a bomb that sticks to buildings only.
 [SAPPER]
 TechLevel=1
@@ -443,6 +484,13 @@ ROF=30
 Range=6
 Projectile=Bullet
 Warhead=SA
+
+[Bazooka]
+Damage=40
+ROF=50
+Range=5
+Projectile=Bullet
+Warhead=AP
 
 [Cannon]
 Damage=90
@@ -855,11 +903,67 @@ def test_a_wrecker_hero_goes_for_the_yards(fielded: Fielded) -> None:
     assert (10001, 26) in fielded.lines(fielded.named["Hero WRECKER"])
 
 
-def test_carriers_ride_with_infantry_and_deployers_deploy(fielded: Fielded) -> None:
+def test_a_carrier_rides_out_with_each_kind_of_rider(fielded: Fielded) -> None:
+    # MO's own AI seated a dozen kinds of infantry in an IFV. A carrier
+    # takes the rider that hurts each class of target most aboard: the
+    # bazooka against vehicles, the rifle against infantry. Then both
+    # side by side where a carrier seats two, and a hero with the main
+    # crew in the other carriers.
+    mounted = [name for name in fielded.named if name.startswith("Mounted CARRIER")]
+    assert mounted == [
+        "Mounted CARRIER BAZ",
+        "Mounted CARRIER GI",
+        "Mounted CARRIER BAZ+GI",
+        "Mounted CARRIER HERO+BAZ",
+    ]
     # As many carriers as a line has front tanks, two riders in each.
-    mounted = fielded.named["Mounted CARRIER"]
-    assert fielded.crew(mounted) == ((4, "CARRIER"), (8, "GI"))
-    assert (10103, 0) in fielded.lines(mounted)
+    crews = {name: fielded.crew(fielded.named[name]) for name in mounted}
+    assert crews["Mounted CARRIER BAZ"] == ((4, "CARRIER"), (8, "BAZ"))
+    assert crews["Mounted CARRIER BAZ+GI"] == ((4, "CARRIER"), (4, "BAZ"), (4, "GI"))
+    assert crews["Mounted CARRIER HERO+BAZ"] == (
+        (4, "CARRIER"),
+        (1, "HERO"),
+        (7, "BAZ"),
+    )
+    assert fielded.named["Mounted CARRIER HERO+BAZ"].max_teams == 1
+
+
+def test_a_gunner_vehicle_is_judged_by_the_weapon_its_rider_gives(
+    fielded: Fielded, catalog: Catalog
+) -> None:
+    # The infantry in an IFV's seat picks its weapon (`IFVMode` n fires
+    # `Weapon` n + 1): the bazooka fits the cannon, the rifleman leaves
+    # the rifle. An IFV seats one, so it has no mixed crew.
+    ifv, baz, gi = (catalog.units[name] for name in ("ifv", "baz", "gi"))
+    assert ifv.has(Role.GUNNER)
+    assert ifv.mounts[baz.seat_mode].vehicle > ifv.mounts[gi.seat_mode].vehicle
+    assert ifv.mounts[gi.seat_mode].infantry > ifv.mounts[baz.seat_mode].infantry
+    mounted = [name for name in fielded.named if name.startswith("Mounted IFV")]
+    assert mounted == ["Mounted IFV BAZ", "Mounted IFV GI", "Mounted IFV HERO+BAZ"]
+    assert fielded.crew(fielded.named["Mounted IFV BAZ"]) == ((4, "IFV"), (4, "BAZ"))
+
+
+def test_riders_that_cannot_fire_from_inside_get_out_at_the_gate(
+    fielded: Fielded,
+) -> None:
+    # An IFV fights with its rider's weapon and an open-topped carrier
+    # lets its riders fire, so they stay aboard; in a closed carrier
+    # they would ride to their deaths unused. Vanilla 8,0 sets them
+    # down at the nearer gathering point and keeps both in the team.
+    aboard = fielded.lines(fielded.named["Mounted CARRIER BAZ"])
+    assert aboard == fielded.lines(fielded.named["Mounted IFV BAZ"])
+    assert (10103, 0) in aboard
+    assert (8, 0) not in aboard
+    on_foot = fielded.lines(fielded.named["Mounted APC BAZ"])
+    board, gate, out, attack = (
+        on_foot.index(line) for line in ((10103, 0), (53, -10), (8, 0), (0, 7))
+    )
+    assert board < gate < out < attack
+    # Every team gets out at the nearer point: no roll decides it.
+    assert (16003, 50) not in on_foot
+
+
+def test_deployers_unfold_at_the_enemy_gate(fielded: Fielded) -> None:
     assert (9, 0) in fielded.lines(fielded.named["Forward OUTPOST"])
 
 
@@ -956,7 +1060,7 @@ def test_a_branch_skips_exactly_its_block(fielded: Fielded) -> None:
     # The mounted line boards before it gathers: its optional second
     # gathering sits one line later than a plain line's, and the jump
     # over it must count that line.
-    lines = fielded.lines(fielded.named["Mounted CARRIER"])
+    lines = fielded.lines(fielded.named["Mounted CARRIER BAZ"])
     chance = lines.index((16003, 50))
     assert lines[chance + 1] == (6, chance + 6)
     assert lines[chance + 2 : chance + 5] == ((16001, 60), (53, -10), (16002, 0))
@@ -1059,12 +1163,12 @@ def test_a_hero_is_set_down_by_an_enemy_superweapon(fielded: Fielded) -> None:
     # the side's transport, leads once on the ground, and the first
     # superweapon it wrecks is the success.
     drop = fielded.named["Hero Drop vs SILO"]
-    assert fielded.units(drop) == {"CARRIER", "HERO"}
+    assert fielded.units(drop) == {"IFV", "HERO"}
     assert drop.conduct.transports_return
     assert [call.gate for call in fielded.calls(drop)] == [Gate.enemy_owns("SILO")]
     # Vanilla lines name the silo by its index among the building
     # types (11 in the fixture), the nearest of the enemy's (2 << 16).
-    # Phobos would keep the carrier as leader after it has gone home,
+    # Phobos would keep the transport as leader after it has gone home,
     # and it outranks the hero: no Phobos line may pick the targets.
     silo = (2 << 16) | 11
     lines = fielded.lines(drop)
@@ -1072,8 +1176,58 @@ def test_a_hero_is_set_down_by_an_enemy_superweapon(fielded: Fielded) -> None:
         lines.index(line) for line in ((14, 0), (47, silo), (8, 2), (46, silo), (49, 0))
     )
     assert load < ride < unload < wreck < success
-    assert fielded.plan.leadership["CARRIER"] > fielded.plan.leadership["HERO"]
+    assert fielded.plan.leadership["IFV"] > fielded.plan.leadership["HERO"]
     assert not attacks_by_phobos(lines)
+
+
+def test_a_transport_sets_fighters_down_in_the_enemy_base(fielded: Fielded) -> None:
+    # MO's Borillo rushes: a transport full of the infantry that wreck
+    # buildings rides in beside a class of building and they get out.
+    # On the ground they take vanilla quarries: Phobos would pick their
+    # targets with the weapon of the transport that has left.
+    rush = fielded.named["Rush vs Factory"]
+    assert fielded.crew(rush) == ((4, "BAZ"), (1, "CARRIER"))
+    assert rush.conduct.transports_return
+    lines = fielded.lines(rush)
+    ride, out, wreck, success = (
+        lines.index(line) for line in ((10050, 6), (8, 2), (0, 6), (49, 0))
+    )
+    assert ride < out < wreck < success
+    assert not attacks_by_phobos(lines)
+    # A construction yard is a factory to the engine's quarries.
+    assert (0, 6) in fielded.lines(fielded.named["Rush vs Yard"])
+    # Saboteurs ride the same way: MO's Ivans by Borillo, SEALs by air.
+    sabotage = fielded.named["Sabotage vs Power"]
+    assert fielded.units(sabotage) == {"IFV", "SAPPER"}
+    assert sabotage.script == fielded.named["Rush vs Power"].script
+    # Engineers enter what they are set down beside, as before.
+    drop = fielded.named["Engineer Drop vs Power"]
+    assert fielded.crew(drop) == ((1, "CARRIER"), (2, "ENG"))
+    assert (10001, 9) in fielded.lines(drop)
+
+
+def test_defenders_are_posted_at_the_houses_own_buildings(fielded: Fielded) -> None:
+    # MO's own AI kept its defenders beside its turrets (167 teams). A
+    # post is the watch's crew standing by the nearest own building of
+    # a class; it is a base-defence team, so posts and watches share
+    # the engine's cap on those and add no standing team.
+    watch = fielded.named["Base Watch T2"]
+    for name, target in (("Defence", 7), ("Factory", 6), ("Power", 9)):
+        post = fielded.named[f"{name} Post T2"]
+        assert fielded.crew(post) == fielded.crew(watch)
+        assert post.conduct.base_defense
+        assert fielded.lines(post) == ((10053, target), (10100, 60), (6, 1))
+        assert [call.gate for call in fielded.calls(post)] == [
+            call.gate for call in fielded.calls(watch)
+        ]
+    # The tech guard is a post at what the engineers took.
+    assert fielded.lines(fielded.named["Tech Guard"])[0] == (10053, 11)
+
+
+def test_a_deployer_also_digs_in_at_home(fielded: Fielded) -> None:
+    emplace = fielded.named["Emplace OUTPOST"]
+    assert fielded.crew(emplace) == ((2, "OUTPOST"),)
+    assert fielded.lines(emplace) == ((10053, 7), (9, 0), (49, 0))
 
 
 def test_two_team_calls_pair_their_teams(fielded: Fielded) -> None:
@@ -1096,6 +1250,25 @@ def test_the_team_cap_keeps_the_wait_for_production_short(option: IniData) -> No
     # before its turn.
     assert option.get("General", "TotalAITeamCap") == "40,30,20"
     assert option.integer("General", "DissolveUnfilledTeamDelay") == 30000
+
+
+def test_a_long_gun_keeps_its_distance(catalog: Catalog, option: IniData) -> None:
+    # Phobos KeepRange makes an AI firer back away from a target that
+    # comes nearer while its weapon reloads. The howitzer reaches 12
+    # cells and keeps 11, a cell to fire from, which is beyond the
+    # tank cannon's 5.75; guns no tank is outranged by keep none.
+    assert stand_offs(catalog) == {"Howitzer": 11.0}
+    assert option.number("Howitzer", "KeepRange") == 11.0
+    assert option.flag("General", "KeepRange.AllowAI")
+    assert option.get("Cannon", "KeepRange") is None
+
+
+def test_an_idle_ai_unit_looks_for_targets_twice_as_often(option: IniData) -> None:
+    # A player's units keep the rules' delays: Phobos reads these keys
+    # for AI houses only.
+    assert option.integer("General", "AINormalTargetingDelay") == 14
+    assert option.integer("General", "AIGuardAreaTargetingDelay") == 18
+    assert option.integer("General", "AIAttackMoveTargetingDelay") == 14
 
 
 def test_a_trigger_learns_only_what_its_script_reports(option: IniData) -> None:

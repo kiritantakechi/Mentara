@@ -13,9 +13,10 @@ every other script is shared.
 
 from dataclasses import dataclass, field
 from typing import Final
-lazy from collections.abc import Iterable
+lazy from collections.abc import Iterable, Mapping
 
 from mentara.mentalai.families import FAMILIES, Context, leftovers
+from mentara.mentalai.handling import stand_offs
 from mentara.mentalai.model import (
     AIPlan,
     Call,
@@ -95,7 +96,7 @@ def plan_ai(catalog: Catalog) -> AIPlan:
         )
         orders.extend(leftovers(context, country, used))
         builder.add_country(country, orders)
-    return builder.plan(tuple(context.target_lists))
+    return builder.plan(tuple(context.target_lists), stand_offs(catalog))
 
 
 # A mutable accumulator: it collects every country's objects in turn.
@@ -108,7 +109,11 @@ class _Builder:
     leadership: dict[str, int] = field(default_factory=dict)
     docked: set[str] = field(default_factory=set)
 
-    def plan(self, target_lists: tuple[tuple[str, ...], ...]) -> AIPlan:
+    def plan(
+        self,
+        target_lists: tuple[tuple[str, ...], ...],
+        stand_offs: Mapping[str, float],
+    ) -> AIPlan:
         return AIPlan(
             task_forces=tuple(self.task_forces),
             scripts=tuple(sorted(self.scripts.values(), key=lambda s: s.id)),
@@ -117,6 +122,7 @@ class _Builder:
             leadership=frozendict(sorted(self.leadership.items())),
             docked=frozenset(self.docked),
             target_lists=target_lists,
+            stand_offs=stand_offs,
         )
 
     def add_country(self, country: Country, orders: Iterable[Order]) -> None:

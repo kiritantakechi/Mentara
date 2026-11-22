@@ -459,7 +459,7 @@ profile may stop at any layer but never skips one (a contract test checks
       not check unit prerequisites when it fills a team. A unit's tier
       is the tech level of the building that unlocks it (up to 4, 5-7,
       8 and up).
-    - Volume: about 320 triggers per country, 3,884 in all on 2,432
+    - Volume: about 345 triggers per country, 4,124 in all on 2,672
       teams (MO's own AI has 1,200 triggers). Each team is a set of role
       slots, each filled by the best-scoring unit the country fields at
       the team's tier (at most six member types). The AI skips unit
@@ -530,8 +530,15 @@ profile may stop at any layer but never skips one (a contract test checks
       it; **hijackers** (Ares 67); **garrisons** of civilian buildings;
       the side's **battle bunkers**, **tank bunkers** and **bio
       reactors**; a **tech guard** for what the engineers took;
-      **patrols** between refineries and power plants; and the **base
-      watch**. The tech guard has a trigger per tech building that
+      **patrols** between refineries and power plants; the **base
+      watch**; and **posts**, a watch's crew standing by the house's
+      nearest defence, factory or power plant (Phobos 10053), as MO's
+      own AI kept 167 of its teams beside its turrets and buildings.
+      Posts are base-defence teams, so they share the engine's cap of
+      three with the watches and add no standing team. Units that
+      unfold into a turret or a minefield also **emplace** at home,
+      beside the house's defences, as MO dug in its Irritators and
+      Sweepers. The tech guard has a trigger per tech building that
       waits until the house owns one, and is built from tier-1 units.
     - Engineers: each tech building (`Capturable` and `NeedsEngineer`,
       built by no country: derricks, hospitals, airports, tech
@@ -585,10 +592,9 @@ profile may stop at any layer but never skips one (a contract test checks
       Virus infantry), on vanilla quarries as MO's own teams did:
       Phobos judges the leader's weapon and found an Arsonist or a
       Repulsor no target. Each armed
-      carrier rides out with the infantry that fit it (IFVs, the Battle
-      Fortress, Jackal, Borillo, Halftrack, Sting), Phobos 10103 seating
-      them. Engineers are also air-dropped by aircraft transport (the
-      Stallion). A last pass gives every combat unit still unused a
+      carrier rides out with the infantry that suit it, Phobos 10103
+      seating them (see "Mounted infantry"). Engineers are also
+      air-dropped by aircraft transport (the Stallion). A last pass gives every combat unit still unused a
       strike group of its own. Units whose weapons disable, freeze,
       mark or buff (EMP, attached effects, parasites, berserk) count as
       combat units and fill a disabler slot in the lines; a player's
@@ -596,6 +602,38 @@ profile may stop at any layer but never skips one (a contract test checks
       twin everywhere; anti-air is judged against the armours aircraft
       actually wear (MO's `f_*` armours, which anti-air warheads name in
       `Versus`), not vehicle armour, and Ares `ExtraWarheads` count.
+    - Mounted infantry: MO's own AI seated a dozen kinds of infantry in
+      an IFV, mixed crews in a Battle Fortress and flamethrowers by
+      the Borillo-load; this AI had one crew per carrier, its best
+      anti-infantry rider. A carrier now takes, at each tier from its
+      own, the rider that hurts each class of target most aboard
+      (vehicles, infantry, buildings); where it seats two, the first
+      two of them side by side; and the side's hero with the main crew
+      in the other carriers: 83 squads where there were 20, on 14
+      kinds of carrier (USA's IFV with
+      Guardian G.I.s, G.I.s, Enforcers, SEALs, or Tanya and three
+      Guardians; a Battle Fortress of Guardians and SEALs; a Borillo of
+      Tesla troopers, Flamethrowers or Desolators, or Volkov's). What a
+      rider does aboard is read from the rules: a gunner vehicle
+      (`Gunner`) fires the weapon its rider's `IFVMode` picks, so each
+      IFV is judged with that weapon (a Guardian G.I. gives it missiles
+      that also reach aircraft, a G.I. a machine gun, an engineer a
+      repair arm); from inside an open-topped carrier only weapons that
+      reach three cells count, so no dog or planted charge is seated
+      there. Riders stay aboard a gunner or open-topped carrier. In a
+      closed one (Borillo, Halftrack, Armadillo, Scavenger) they rode
+      to their deaths unused; they now get out at the nearer gathering
+      point (vanilla 8,0, which keeps carriers and riders in the team)
+      and fight beside it. A carrier's crews together weigh about what
+      its one crew did.
+    - Into the base by transport: a **rush** loads a transport with the
+      infantry that wreck the most buildings for their cost and rides
+      in beside the enemy's power, factories or yard, where they get
+      out and fight on vanilla quarries (six Flamethrowers in a
+      Borillo, as MO's "Borillo Rush"; SEALs by Stallion; Brutes by
+      Driller), and **saboteurs** ride the same way (Ivans by Borillo,
+      SEALs by IFV or Stallion). Engineer drops, sabotage and rushes
+      are one family: who rides, how many, and what they do once out.
     - Charges: a unit that is spent on its target (its primary weapon
       is `Suicide`) or must deploy to fire the only weapon it has
       (`DeployFireWeapon=0`) fills no slot: its one shot is not a
@@ -774,6 +812,32 @@ profile may stop at any layer but never skips one (a contract test checks
       takes its highest), so a tank leads and picks targets instead of
       a dog or a hero (MO rates heroes 99). Attack teams are
       `Aggressive`.
+    - Handling: three Phobos keys only AI-owned units obey, each staged
+      with pre-placed units and screenshots before use. (1) G.I.s,
+      Guardian G.I.s and Snipers deploy when their target is in reach
+      of the deployed weapon (`InfantryAutoDeploy`, already set on the
+      three in the rules for every AI): with it forced off in the map
+      they fought standing, with it on they dug in. They are the three
+      whose deployed weapon reaches at least as far as the other; a
+      Desolator or a Yuri clone, whose deployed weapon is a blast at
+      its feet, must not. (2) A gun that outranges every main battle
+      tank keeps its distance while it reloads (`KeepRange`, switched
+      on for AI houses in the option file): the kept distance is the
+      range less a cell (two for infantry), for weapons that reload in
+      60 frames or more, on units that neither dig in nor charge; 26
+      weapons qualify (the Zephyr's howitzer, V3 and Ventrex
+      launchers, the Prism tank, Stalkers, Morales, the Virus). Three
+      AI howitzers against three tanks that closed on them died in
+      place without it and killed none; with it they backed away while
+      reloading and killed all three. (3) An idle AI unit looks for a target
+      every 14 frames, and 18 on Area Guard, where MO has 27 and 36
+      (`AINormalTargetingDelay` and its kin): the gain is a third of a
+      second in noticing a new enemy, too small to see in a staged
+      duel, so only the engine's code vouches for it. It costs no
+      speed that shows: a four-AI game with the keys ran 907 ticks of
+      a clock team in its fixed nine minutes, one without them 856
+      (whose clock team was killed and raised again 14 times, so its
+      count runs low).
     - Not used, broken in Phobos v0.5-alpha2: 12000 (never waits),
       10102 (never regroups), 18000, the "random" list attacks, and
       10104's charge test.
@@ -897,6 +961,17 @@ profile may stop at any layer but never skips one (a contract test checks
       second; PsiCorps's three set out and none reached the mark;
       Russia's four Kirovs were not built in time. 539 teams created,
       435 set out, no unknown action.
+    - With mounted crews, rushes, posts and the handling keys (the same
+      four AIs, one game): 516 teams created, 403 set out, no unknown
+      action. Fifteen kinds of mounted squad were raised and ten set
+      out (IFVs with Guardian G.I.s and with SEALs, Borillos and
+      Scavengers of Tesla troopers and Flamethrowers, Jackals,
+      Gharials, Stingers with Libra); none lived through the break-in,
+      so their triggers lose weight as they did before (5 of 23 in the
+      games before). Four rushes and four sabotage teams set out; three
+      rushes and one sabotage team reached their building and got out,
+      and none was alive 150 seconds later. Twelve posts and two home
+      emplacements formed beside four base watches.
   - Rules in the first wave:
     - **aura**: 19 field emitters (Ultra Dome, Lightning Rod, Repair
       Crane, Iron Guard, Disruptor, Chimera Core, Haze Core, Magnetic
@@ -1218,14 +1293,17 @@ numbers its IDs with four digits, family then tier or variant
 (`MNTTF0102RU-G` is Russia's tier-2 line, with team `MNTTT0102RU-G` and
 trigger `MNTTR0102RU-G`): 01-03 lines (direct, flank, hunt), 04 line
 with air, 05-06 siege, 07-11 blitz, feint, economy, power and stealth
-raids, 12 pincer, 13 air strike, 14 feint and strike, 15 base watch, 16
+raids, 12 pincer, 13 air strike, 14 feint and strike, 15 base watch
+(1511 on, posts), 16
 patrol, 17 tech guard, 18 sky guard, 19 superweapon snipe, 20-25
 capture (a trigger per tech building), garrison, bunkers, bio reactor,
-hijack, 26 spies, 27 engineer drops (2711-2713 by air), 28 bridge
+hijack, 26 spies, 27 drops (engineers from 2701, saboteurs from 2721,
+rushes from 2741; ten more by air), 28 bridge
 repair, 29 starve, 30-32 navy, 33 flotillas, 34 escorted siege, 35
 Chronosphere, 36 Iron Curtain, 37 boost assaults, 38 blackout assault,
 39 finishing hunt, 40 grid strike, 41 squadrons, 42 heroes, 43 forward
-deployers, 44 bombers, 45 carriers, 46 strike groups, 47 charges, 48
+deployers (4351 on, emplaced at home), 44 bombers, 45 carriers (ten
+numbers a carrier, one a crew), 46 strike groups, 47 charges, 48
 charges under the Iron Curtain, 49 hero drops (4951 on by air), 50-59
 counter triggers, 60-89 counter squads, 99 MCV. A grand line is
 numbered 50 past its tier's line (`MNTTT0153RU-G`), and an air snipe 50

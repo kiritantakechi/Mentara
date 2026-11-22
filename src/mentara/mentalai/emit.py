@@ -48,10 +48,20 @@ _PRIORITY: Final[Mapping[bool, int]] = frozendict({False: 5, True: 6})
 # next to none of them set out, at 15000 about half (4 of 16 and 11 of
 # 19 economy raids), at 30000 15 of 17. Members of an ended team join
 # other teams (Phobos) instead of idling.
+#
+# Handling. A unit with no target looks for one every so many frames
+# (plus up to two): MO's 27, and 36 on Area Guard, are halved for AI
+# houses, so an idle unit notices a new enemy a third of a second
+# sooner on average (Phobos; a player's units keep MO's). And AI firers
+# obey the stand-off distances below (Phobos `KeepRange`).
 _GENERAL: Final[tuple[tuple[str, str], ...]] = (
     ("TotalAITeamCap", "40,30,20"),
     ("DissolveUnfilledTeamDelay", "30000"),
     ("SetRecruitableOnLiberate", "1"),
+    ("AINormalTargetingDelay", "14"),
+    ("AIGuardAreaTargetingDelay", "18"),
+    ("AIAttackMoveTargetingDelay", "14"),
+    ("KeepRange.AllowAI", "yes"),
 )
 
 _RULES_HEADER: Final[str] = """\
@@ -86,6 +96,13 @@ _UNIT_NOTE: Final[str] = """\
 ; The member with the highest LeadershipRating leads a team and picks its
 ; targets: the front line first, then artillery, heroes, the screen, AA
 ; and support. Airfield-bound craft are not cloned: a clone has no pad.
+"""
+
+_WEAPON_NOTE: Final[
+    str
+] = """; A gun that outranges every main battle tank keeps this far from its
+; target while it reloads, so its unit backs away from what closes on it.
+; Only AI houses obey ([General] KeepRange.AllowAI above).
 """
 
 
@@ -130,6 +147,13 @@ def render_option_fragment(plan: AIPlan) -> str:
     if units:
         blocks.append(_UNIT_NOTE + units[0])
         blocks.extend(units[1:])
+    weapons = [
+        _section(weapon, (f"KeepRange={distance:g}",))
+        for weapon, distance in plan.stand_offs.items()
+    ]
+    if weapons:
+        blocks.append(_WEAPON_NOTE + weapons[0])
+        blocks.extend(weapons[1:])
     return "\n\n".join(blocks) + "\n"
 
 

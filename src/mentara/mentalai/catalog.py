@@ -83,6 +83,13 @@ class Role(StrEnum):
     # Fights by closing in: its weapon destroys it (`Suicide`), or it
     # must deploy to fire the only weapon it has.
     CHARGER = "charger"
+    # Digs in or unfolds where it stands (`IsSimpleDeployer`, infantry
+    # `Deployer`): it cannot give ground while it fights.
+    DIGS_IN = "digs-in"
+    # Takes its weapon from the infantry in its seat (`Gunner`).
+    GUNNER = "gunner"
+    # Its passengers fire from inside (`OpenTopped`).
+    OPEN_TOPPED = "open-topped"
 
 
 # The engine's base armour classes, in the order `Verses=` lists them.
@@ -108,6 +115,8 @@ _ARMOURED: Final[frozenset[str]] = frozenset({"medium", "heavy"})
 _ARMOR_DEPTH_MAX: Final[int] = 16
 # Damage per second at the engine's 15 frames a second.
 _FRAMES_PER_SECOND: Final[float] = 15.0
+# A weapon that reaches this many cells is fired from a distance.
+_REACH_MIN: Final[float] = 3.0
 # A single hit below this only carries an effect (EMP, a designator).
 _GUN_HIT_MIN: Final[float] = 10.0
 # One damage class must deal twice the other to count as specialised.
@@ -165,6 +174,24 @@ _BUILT_IN_GROUPS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
 
 
 @dataclass(frozen=True, slots=True)
+class Gun:
+    """One of a unit's ground weapons, as its rules spell it.
+
+    Attributes:
+        types: Its weapon type and, where the unit has one, the type an
+            elite unit fires in its place.
+        range: Its range, in cells.
+        minimum_range: Its minimum range, in cells.
+        reload: Frames between its firings.
+    """
+
+    types: tuple[str, ...]
+    range: float
+    minimum_range: float
+    reload: float
+
+
+@dataclass(frozen=True, slots=True)
 class Firepower:
     """A unit's best damage per second against each class of target.
 
@@ -176,6 +203,7 @@ class Firepower:
         hit: The strongest single ground hit.
         range: The longest ground weapon range, in cells.
         minimum_range: The longest ground weapon's minimum range.
+        guns: Its ground weapons, in the order its rules list them.
         lobbed: Whether a long ground weapon arcs or launches craft.
         heals: Whether a weapon heals infantry.
         repairs: Whether a weapon repairs vehicles.
@@ -191,6 +219,7 @@ class Firepower:
     hit: float
     range: float
     minimum_range: float
+    guns: tuple[Gun, ...]
     lobbed: bool
     heals: bool
     repairs: bool
@@ -210,11 +239,17 @@ class Unit:
         strength: Hit points.
         factory: The building kind that produces it.
         firepower: Its damage profile.
+        ranged: Its damage profile with the weapons that reach past
+            arm's length: what it does from inside an open-topped
+            carrier, where a blade or a planted charge reaches nothing.
         roles: Every role tag it carries.
         passengers: Transport capacity.
         armor: Its armour, lower-case.
         size: The room it takes in a transport.
         size_limit: The largest passenger a transport takes.
+        seat_mode: Which weapon an infantry gives a gunner vehicle it
+            rides (`IFVMode`).
+        mounts: For a gunner vehicle, its firepower by seat mode.
     """
 
     id: str
@@ -224,11 +259,14 @@ class Unit:
     strength: int
     factory: Factory
     firepower: Firepower
+    ranged: Firepower
     roles: frozenset[Role]
     passengers: int
     armor: str
     size: int
     size_limit: int
+    seat_mode: int
+    mounts: Mapping[int, Firepower]
 
     def has(self, *roles: Role) -> bool:
         """Whether the unit carries every role given.
@@ -435,6 +473,7 @@ class _Arsenal:
 
 @dataclass(frozen=True, slots=True)
 class _Weapon:
+    id: str
     damage: float
     burst: float
     rate: float
@@ -500,11 +539,16 @@ class _Reader:
             strength=rules.integer(name, "Strength"),
             factory=self._factory_kind(name, kind),
             firepower=firepower,
+            ranged=self._profile(
+                name, [w for w in self._weapons(name) if w.range >= _REACH_MIN]
+            ),
             roles=self._roles(name, kind, firepower),
             passengers=rules.integer(name, "Passengers"),
             armor=self._armor(name),
             size=rules.integer(name, "Size", 1),
             size_limit=rules.integer(name, "SizeLimit"),
+            seat_mode=rules.integer(name, "IFVMode"),
+            mounts=self._mounts(name),
         )
 
     def _factory_kind(self, name: str, kind: Kind) -> Factory:
@@ -555,6 +599,12 @@ class _Reader:
             (self._warheads_have(name, ("IvanBomb",)), Role.BOMBER),
             (bool(rules.get(name, "Convert.HumanToComputer")), Role.PLAYER_VERSION),
             (self._charges(name), Role.CHARGER),
+            (
+                rules.flag(name, "IsSimpleDeployer") or rules.flag(name, "Deployer"),
+                Role.DIGS_IN,
+            ),
+            (rules.flag(name, "Gunner"), Role.GUNNER),
+            (rules.flag(name, "OpenTopped"), Role.OPEN_TOPPED),
             (bool(rules.get(name, "DeploysInto")) and not yard, Role.DEPLOYER),
         )
         roles.update(role for present, role in flags if present)
@@ -619,7 +669,29 @@ class _Reader:
     # --- Weapons -----------------------------------------------------
 
     def _firepower(self, name: str) -> Firepower:
-        weapons = [w for w in self._weapons(name) if w.damage != 0]
+        return self._profile(name, self._weapons(name))
+
+    def _mounts(self, name: str) -> Mapping[int, Firepower]:
+        """A gunner vehicle's firepower with each of its weapons.
+
+        The infantry in its seat picks the weapon: `IFVMode` n fires
+        `Weapon` n + 1.
+        """
+        rules = self._rules
+        count = rules.integer(name, "WeaponCount") if rules.flag(name, "Gunner") else 0
+        found = (
+            (mode, self._weapon(rules.get(name, f"Weapon{mode + 1}"), owner=name))
+            for mode in range(count)
+        )
+        return frozendict(
+            (mode, self._profile(name, [weapon]))
+            for mode, weapon in found
+            if weapon is not None
+        )
+
+    def _profile(self, name: str, fitted: list[_Weapon]) -> Firepower:
+        """A unit's firepower with a set of weapons fitted."""
+        weapons = [w for w in fitted if w.damage != 0]
         ground = [w for w in weapons if w.anti_ground]
         # LandTargeting=1 keeps a unit off land targets; a ship still
         # hits ships, any other unit only aircraft.
@@ -638,6 +710,10 @@ class _Reader:
             hit=max((self._hit(w) for w in ground), default=0.0),
             range=longest.range if longest else 0.0,
             minimum_range=longest.minimum_range if longest else 0.0,
+            guns=tuple(
+                Gun(self._with_elite(name, w.id), w.range, w.minimum_range, w.rate)
+                for w in ground
+            ),
             lobbed=any(w.lobbed and w.range >= _LOBBED_RANGE_MIN for w in ground),
             heals=any(self._mends(w, _INFANTRY_ARMORS) for w in weapons),
             repairs=any(self._mends(w, _VEHICLE_ARMORS) for w in weapons),
@@ -657,18 +733,33 @@ class _Reader:
             ),
         )
 
-    def _weapons(self, name: str) -> list[_Weapon]:
+    def _weapon_keys(self, name: str) -> tuple[str, ...]:
+        """The keys a unit's weapons sit under."""
         rules = self._rules
         count = rules.integer(name, "WeaponCount")
-        if count > 0:
-            # A gunner IFV fires Weapon1 while its seat is empty.
-            if rules.flag(name, "Gunner"):
-                count = 1
-            keys = [f"Weapon{index}" for index in range(1, count + 1)]
-        else:
-            keys = ["Primary", "Secondary"]
+        if count <= 0:
+            return ("Primary", "Secondary")
+        # A gunner IFV fires Weapon1 while its seat is empty.
+        if rules.flag(name, "Gunner"):
+            count = 1
+        return tuple(f"Weapon{index}" for index in range(1, count + 1))
+
+    def _weapons(self, name: str) -> list[_Weapon]:
+        rules = self._rules
+        keys = self._weapon_keys(name)
         found = (self._weapon(rules.get(name, key), owner=name) for key in keys)
         return [weapon for weapon in found if weapon is not None]
+
+    def _with_elite(self, name: str, weapon: str) -> tuple[str, ...]:
+        """A unit's weapon, and the one it fires instead when elite."""
+        rules = self._rules
+        elite = (
+            rules.get(name, f"Elite{key}")
+            for key in self._weapon_keys(name)
+            if (rules.get(name, key) or "").lower() == weapon.lower()
+        )
+        twins = (rules.name(e) for e in elite if e is not None and rules.has(e))
+        return tuple(dict.fromkeys((weapon, *twins)))
 
     def _weapon(self, name: str | None, *, owner: str) -> _Weapon | None:
         rules = self._rules
@@ -676,6 +767,7 @@ class _Reader:
             return None
         projectile = rules.get(name, "Projectile") or ""
         weapon = _Weapon(
+            id=rules.name(name),
             damage=rules.number(name, "Damage"),
             burst=_at_least_one(rules.number(name, "Burst", 1.0)),
             rate=_at_least_one(rules.number(name, "ROF", 1.0)),

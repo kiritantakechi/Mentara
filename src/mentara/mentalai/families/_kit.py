@@ -29,6 +29,7 @@ from mentara.mentalai.slots import (
     Slot,
     fill,
 )
+lazy from mentara.mentalai.catalog import Firepower
 lazy from mentara.mentalai.scripts import Quarry
 
 type Order = Squad | Call
@@ -438,15 +439,20 @@ class Aim(Enum):
     INFANTRY = "infantry"
 
 
+def harm(fire: Firepower, aim: Aim) -> float:
+    """A firepower's damage per second against a class of target."""
+    match aim:
+        case Aim.BUILDINGS:
+            return fire.building
+        case Aim.VEHICLES:
+            return fire.vehicle
+        case Aim.INFANTRY:
+            return fire.infantry
+
+
 def aim_of(unit: Unit) -> Aim:
     """What a unit hurts most; a tie goes to what stands still."""
-    fire = unit.firepower
-    damage = {
-        Aim.BUILDINGS: fire.building,
-        Aim.VEHICLES: fire.vehicle,
-        Aim.INFANTRY: fire.infantry,
-    }
-    return max(damage, key=damage.__getitem__)
+    return max(Aim, key=lambda aim: harm(unit.firepower, aim))
 
 
 @dataclass(frozen=True, slots=True)

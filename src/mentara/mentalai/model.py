@@ -403,6 +403,9 @@ class AIPlan:
         docked: Airfield-bound members, which the AI must not clone
             (Phobos `ForbidParallelAIQueues`).
         target_lists: Phobos `[AITargetTypes]`, in index order.
+        stand_offs: Weapon type to the distance, in cells, an AI firer
+            keeps from its target while the weapon reloads (Phobos
+            `KeepRange`).
     """
 
     task_forces: tuple[TaskForce, ...]
@@ -412,3 +415,4 @@ class AIPlan:
     leadership: Mapping[str, int]
     docked: frozenset[str]
     target_lists: tuple[tuple[str, ...], ...]
+    stand_offs: Mapping[str, float]
