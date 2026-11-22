@@ -39,6 +39,7 @@ __all__ = [
     "absorb",
     "air_snipe",
     "air_strike",
+    "air_support",
     "blitz",
     "bombing",
     "bridge_repair",
@@ -51,15 +52,19 @@ __all__ = [
     "drop",
     "economy_raid",
     "emplace",
+    "escort",
     "feint",
     "forward_deploy",
     "garrison",
     "hijack",
     "infiltrate",
+    "intercept",
+    "landing",
     "line_direct",
     "line_flank",
     "line_hunt",
     "mechanised",
+    "miner_hunt",
     "mounted",
     "naval_bombard",
     "naval_hunt",
@@ -68,6 +73,7 @@ __all__ = [
     "patrol",
     "post",
     "power_raid",
+    "psychic_assault",
     "redeploy",
     "rush",
     "siege",
@@ -103,9 +109,13 @@ class Target(IntEnum):
     ORE_MINERS = 3
     FACTORIES = 6
     DEFENSES = 7
+    # Enemies aiming at anything of the house's, and those near the
+    # team's leader.
+    HOUSE_THREATS = 8
     POWER = 9
     TECH = 11
     REFINERY = 12
+    AIR_UNITS = 14  # aircraft on their pads included
     ECONOMY = 18
     BARRACKS = 19
     VEHICLE_FACTORY = 20
@@ -142,7 +152,9 @@ class _Action(IntEnum):
     STRIKE_LISTED = 10012  # the closest, most threatening of a list
     MOVE_TO_ENEMY = 10050
     MOVE_TO_OWN = 10053
+    MOVE_TO_OWN_LISTED = 10054  # the house's nearest unit of a list
     MOVE_TO_FAR_ENEMY = 10056
+    MOVE_TO_FAR_OWN_LISTED = 10060  # its farthest
     AREA_GUARD = 10100
     BOARD = 10103
     MOVE_DISTANCE = 12001
@@ -186,6 +198,17 @@ _STRIKE: Final[int] = 60  # an opening strike before the push
 _HUNT_PROOF: Final[int] = 120
 _RAID_PROOF: Final[int] = 150  # a raid's first target, the way included
 _SORTIE: Final[int] = 90
+# A team that answers threats waits this long between answers, and
+# answers this many times before it ends.
+_ALERT: Final[int] = 20
+_ANSWERS: Final[int] = 6
+# A sea crossing takes longer than a drive.
+_SAIL_TIMEOUT: Final[int] = 180
+# An escort has this long to reach the units it joins, holds this long
+# beside them, and joins the nearest again this many times.
+_ESCORT_TIMEOUT: Final[int] = 90
+_ESCORT_STOP: Final[int] = 30
+_ESCORT_STOPS: Final[int] = 6
 # Cells.
 _FLANK_DISTANCE: Final[int] = 6
 _DROP_DISTANCE: Final[int] = 4
@@ -525,6 +548,26 @@ def decapitate(casts: tuple[int, ...]) -> Lines:
     )
 
 
+def psychic_assault(casts: tuple[int, ...]) -> Lines:
+    """Stage, then take the enemy's vehicles, then its infantry.
+
+    For mind controllers. Vanilla quarries: a controller's weapon does
+    no damage, and Phobos judges a target by the damage the leader
+    would do it. What the controllers take joins the team
+    (`MindControlDecision`) and fights on with it.
+    """
+    return (
+        _stage(closer=50)
+        .then(
+            *_casts(casts),
+            *_proven(_HUNT_PROOF, _attack(Quarry.VEHICLES)),
+            _attack(Quarry.INFANTRY),
+            *_MOP_UP,
+        )
+        .done()
+    )
+
+
 def mounted(casts: tuple[int, ...]) -> Lines:
     """Board the team's own carriers, ride out, fight from them.
 
@@ -733,6 +776,62 @@ def air_strike(first: Quarry, second: Quarry) -> Lines:
     )
 
 
+def miner_hunt() -> Lines:
+    """Aircraft on the harvesters, then on the vehicles sent after them.
+
+    MO's own Wolfhounds, Pteranodons and Dragonflies flew it. Vanilla
+    quarries, as in an air strike, and both before the mark.
+    """
+    return (
+        *_timed(_SORTIE, _attack(Quarry.HARVESTERS)),
+        *_proven(_SORTIE, _attack(Quarry.VEHICLES)),
+        _attack(Quarry.HARVESTERS),
+        *_MOP_UP,
+    )
+
+
+def _answers() -> Lines:
+    """Go for what threatens the house, a number of times over.
+
+    Phobos's house threats are the enemies aiming at anything of the
+    house's and those near the team's leader, the nearest first: at the
+    base while it is attacked, at the front while a line is. With no
+    threat the line ends at once and the team holds for a spell.
+    """
+    answer = (
+        *_timed(_SORTIE, _strike(Target.HOUSE_THREATS, once=True)),
+        _guard(_ALERT),
+    )
+    return answer * _ANSWERS
+
+
+def air_support() -> Lines:
+    """Fly at whatever is attacking the house, wherever that is.
+
+    For craft that stay in the air: they cover the base and the lines
+    alike, and reach either before a ground team would. The script
+    marks nothing, so its trigger keeps a steady weight: an hour with
+    nothing to answer is no failure.
+    """
+    return _answers()
+
+
+def intercept() -> Lines:
+    """Hunt the enemy's aircraft, in the air and on their pads.
+
+    Each kill raises the trigger's weight at once (Phobos 14000) and
+    nothing marks success, so a flight that ends without one lowers
+    it. With a mark after the first strike, a flight that found no
+    aircraft at all ended that line at once and was paid for it: the
+    USA flew 13 such flights in one game against a Russia with an
+    airfield and nothing on it.
+    """
+    return (
+        (_Action.REWARD, _REWARD),
+        *_timed(_STAND, _strike(Target.AIR_UNITS)),
+    )
+
+
 # --- Holding ground --------------------------------------------------
 
 
@@ -769,10 +868,12 @@ def patrol() -> Lines:
 
 
 def post(target: Target) -> Lines:
-    """Stand by the house's nearest building of a class, for good.
+    """Stand by the house's nearest building or unit of a class.
 
-    MO's own AI kept most of its defenders this way, beside its
-    turrets; a house with none of the class yet holds where it is.
+    For good: MO's own AI kept most of its defenders this way, beside
+    its turrets. A house with none of the class yet holds where it is,
+    and a team posted to a class that moves, the harvesters, follows
+    it at each round.
     """
     return ((_Action.MOVE_TO_OWN, target), _guard(_WATCH), _jump(1))
 
@@ -809,6 +910,28 @@ def absorb() -> Lines:
 def redeploy() -> Lines:
     """Deploy the MCV where it stands."""
     return (_DEPLOY,)
+
+
+def escort(front: int) -> Lines:
+    """Join the house's forward units and hold beside them.
+
+    `front` is an `[AITargetTypes]` list of the house's front-line
+    units. The team first goes to the farthest of them (Phobos 10060),
+    which from home is one at the front, then keeps joining the nearest
+    (10054) as they move on or fall. Beside them every member does its
+    own work under Area Guard: a medic heals, anti-air covers. After
+    its stops the team ends, and a new one sets out from home.
+    """
+    follow = (
+        *_timed(_ESCORT_TIMEOUT, (_Action.MOVE_TO_OWN_LISTED, front)),
+        _guard(_ESCORT_STOP),
+    )
+    return (
+        _REGROUP,
+        *_timed(_STAGE_TIMEOUT, (_Action.MOVE_TO_FAR_OWN_LISTED, front)),
+        _guard(_ESCORT_STOP),
+        *follow * _ESCORT_STOPS,
+    )
 
 
 # --- Agents ----------------------------------------------------------
@@ -886,6 +1009,27 @@ def rush(target: Target) -> Lines:
     return (
         *_ride(target),
         *_proven(_RAID_PROOF, _attack(_QUARRY_AT[target])),
+        _attack(Quarry.STRUCTURES),
+        *_MOP_UP,
+    )
+
+
+def landing(target: Target, casts: tuple[int, ...]) -> Lines:
+    """Cross to the far side of the enemy's base and storm it.
+
+    The team's hover transport takes it to the enemy's farthest
+    building of a class (Phobos 10056), which from the house's shipyard
+    lies behind the base, away from where its lines come in. On the
+    beach the riders take vanilla quarries, as a rush does, and the
+    empty transport goes home for the next party.
+    """
+    return (
+        _LOAD,
+        (_Action.MOVE_DISTANCE, _DROP_DISTANCE),
+        *_timed(_SAIL_TIMEOUT, (_Action.MOVE_TO_FAR_ENEMY, target)),
+        _UNLOAD,
+        *_casts(casts),
+        *_proven(_BREAK_IN, _attack(_QUARRY_AT[target])),
         _attack(Quarry.STRUCTURES),
         *_MOP_UP,
     )

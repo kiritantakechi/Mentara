@@ -1,4 +1,4 @@
-"""Holding the base: watch, posts, patrol, tech guard and sky guard."""
+"""Holding the base: watch, posts, patrol and the guards beyond it."""
 
 from typing import Final
 lazy from collections.abc import Iterator, Mapping
@@ -37,10 +37,11 @@ SKY_WATCH: Final[Script] = Script(5200, "Sky Guard", sc.stand_guard())
 
 
 def defense(ctx: Context, country: Country) -> Iterator[Order]:
-    """Base watch, patrol, tech guard and anti-air against enemy air."""
+    """Watch, posts, patrol, guards and anti-air against enemy air."""
     yield from _base_watch(ctx, country)
     yield from _posts(ctx, country)
     yield from _patrol(ctx, country)
+    yield from _miner_guard(ctx, country)
     yield from _tech_guard(ctx, country)
     yield from _sky_guard(ctx, country)
 
@@ -107,6 +108,23 @@ def _patrol(ctx: Context, country: Country) -> Iterator[Order]:
     script = Script(5100, "Patrol", sc.patrol())
     squad = Squad(Series.PATROL.at(), "Patrol", crew, script, GUARD, max_teams=1)
     yield from on_call(squad, gate, 15)
+
+
+def _miner_guard(ctx: Context, country: Country) -> Iterator[Order]:
+    """A guard that keeps to the house's nearest harvester.
+
+    A raid finds the harvesters out at the ore, away from the watch
+    and the posts; this guard moves with them.
+    """
+    gate = from_tier(country, 1)
+    crew = fill(((FRONT, 1), (SCREEN, 2), (AA, 1)), ctx.fielded(country, 1), 1)
+    if gate is None or crew is None:
+        return
+    script = Script(5500, "Miner Guard", sc.post(Target.ORE_MINERS))
+    squad = Squad(
+        Series.MINER_GUARD.at(), script.name, crew, script, GUARD, max_teams=1
+    )
+    yield from on_call(squad, gate, 20)
 
 
 def _tech_guard(ctx: Context, country: Country) -> Iterator[Order]:

@@ -1,21 +1,16 @@
-"""Fast single-role teams: raids, feints and air strikes."""
+"""Fast single-role ground teams: raids, blitzes and feints."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Final
-lazy from collections.abc import Callable, Iterator, Mapping
+lazy from collections.abc import Callable, Iterator
 
 from mentara.mentalai import scripts as sc
-from mentara.mentalai.catalog import Country, Role, Unit
 from mentara.mentalai.families._kit import (
     FEINT,
     RAID,
-    SORTIE,
-    Aim,
     Context,
-    Course,
     Order,
     Series,
-    aim_of,
     at_tier,
     on_call,
     variants_of,
@@ -24,16 +19,15 @@ from mentara.mentalai.model import (
     Conduct,
     Squad,
 )
-from mentara.mentalai.scripts import Lines, Quarry, Script
+from mentara.mentalai.scripts import Lines, Script
 from mentara.mentalai.slots import (
-    AIR,
     FAST,
     RAIDER,
     STEALTH,
     STRIKER,
     Seats,
-    fill,
 )
+lazy from mentara.mentalai.catalog import Country
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,54 +113,3 @@ def raids(ctx: Context, country: Country) -> Iterator[Order]:
                     raid.doctrine,
                 )
                 yield from on_call(squad, gate, variant.weight(raid.weight))
-
-
-_AIR_COURSES: Final[Mapping[Aim, Course]] = frozendict(
-    {
-        Aim.VEHICLES: Course(4001, (Quarry.VEHICLES, Quarry.DEFENSES)),
-        Aim.INFANTRY: Course(4002, (Quarry.INFANTRY, Quarry.OCCUPIED)),
-        Aim.BUILDINGS: Course(4003, (Quarry.DEFENSES, Quarry.STRUCTURES)),
-    }
-)
-
-
-def air_script(unit: Unit) -> Script:
-    """A strike on the class a craft hurts most, named by its quarry."""
-    course = _AIR_COURSES[aim_of(unit)]
-    first, second = course.quarries
-    name = f"Air Strike vs {first.name.lower()}"
-    return Script(course.code, name, sc.air_strike(first, second))
-
-
-_AIR_TIERS: Final[tuple[int, ...]] = (2, 3)
-
-
-def air_strikes(ctx: Context, country: Country) -> Iterator[Order]:
-    """Strike craft on the class they hurt most.
-
-    Airfield-bound craft share one airfield's pads across the tiers,
-    one team per tier: an aircraft with no free pad is never built, and
-    the AI abandons it.
-    """
-    for tier in _AIR_TIERS:
-        gate = at_tier(country, tier)
-        crew = fill(((AIR, 4),), ctx.fielded(country, tier), tier)
-        if gate is None or crew is None:
-            continue
-        craft = crew[0].unit
-        max_teams = 3
-        if craft.has(Role.DOCKED):
-            share = country.docks // len(_AIR_TIERS)
-            if share <= 0:
-                continue
-            crew = tuple(replace(m, count=min(m.count, share)) for m in crew)
-            max_teams = 1
-        squad = Squad(
-            Series.AIR_STRIKE.at(tier),
-            f"Air Strike T{tier}",
-            crew,
-            air_script(craft),
-            SORTIE,
-            max_teams=max_teams,
-        )
-        yield from on_call(squad, gate, 50)

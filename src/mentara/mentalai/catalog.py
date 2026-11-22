@@ -90,6 +90,8 @@ class Role(StrEnum):
     GUNNER = "gunner"
     # Its passengers fire from inside (`OpenTopped`).
     OPEN_TOPPED = "open-topped"
+    # Crosses water and land alike (an amphibious `MovementZone`).
+    AMPHIBIOUS = "amphibious"
 
 
 # The engine's base armour classes, in the order `Verses=` lists them.
@@ -160,6 +162,8 @@ _ROCKETS: Final[tuple[tuple[str, str], ...]] = (
     ("DMisl", "DMislWarhead"),
     ("CMisl", "CMislWarhead"),
 )
+# `MovementZone` values that cross water and land begin with this.
+_AMPHIBIOUS_ZONE: Final[str] = "amphibious"
 _JUMPJET_LOCOMOTOR: Final[str] = "{92612C46-F71F-11D1-AC9F-006008055BB5}"
 _FLY_LOCOMOTOR: Final[str] = "{4A582746-9839-11D1-B709-00A024DDAFD1}"
 # YR's built-in generic prerequisites, read from `[General]`.
@@ -566,6 +570,10 @@ class _Reader:
         rules = self._rules
         return rules.flag(name, "Naval") or rules.token(name, "MovementZone") == "water"
 
+    def _is_amphibious(self, name: str) -> bool:
+        zone = self._rules.token(name, "MovementZone")
+        return zone.startswith(_AMPHIBIOUS_ZONE)
+
     def _roles(self, name: str, kind: Kind, fire: Firepower) -> frozenset[Role]:
         rules = self._rules
         airborne = self._flies(name, kind)
@@ -605,6 +613,7 @@ class _Reader:
             ),
             (rules.flag(name, "Gunner"), Role.GUNNER),
             (rules.flag(name, "OpenTopped"), Role.OPEN_TOPPED),
+            (self._is_amphibious(name), Role.AMPHIBIOUS),
             (bool(rules.get(name, "DeploysInto")) and not yard, Role.DEPLOYER),
         )
         roles.update(role for present, role in flags if present)

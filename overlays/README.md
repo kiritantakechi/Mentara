@@ -459,7 +459,7 @@ profile may stop at any layer but never skips one (a contract test checks
       not check unit prerequisites when it fills a team. A unit's tier
       is the tech level of the building that unlocks it (up to 4, 5-7,
       8 and up).
-    - Volume: about 345 triggers per country, 4,124 in all on 2,672
+    - Volume: about 385 triggers per country, 4,616 in all on 3,134
       teams (MO's own AI has 1,200 triggers). Each team is a set of role
       slots, each filled by the best-scoring unit the country fields at
       the team's tier (at most six member types). The AI skips unit
@@ -577,9 +577,9 @@ profile may stop at any layer but never skips one (a contract test checks
       (MO's AI fielded 10 to 14 units per country that the slots alone
       never chose). Lines, sieges and raids come in up to three
       variants, the best unit per slot and then the second and third
-      best (weights 100%, 60%, 40%). Each strike craft has a squadron
-      (an anti-air-only craft holds the sky over the base) and each
-      warship a flotilla (artillery bombards, anti-ship hunts). Each
+      best (weights 100%, 60%, 40%). Each craft flies the sorties that
+      suit it (see "Air") and each
+      warship has a flotilla (artillery bombards, anti-ship hunts). Each
       hero leads an escort, and one that wrecks buildings goes for the
       construction yards first: M.A.D.M.A.N.'s AI twin, which MO's
       Haihead AI drove at the yards and this AI had never fielded,
@@ -632,8 +632,81 @@ profile may stop at any layer but never skips one (a contract test checks
       out and fight on vanilla quarries (six Flamethrowers in a
       Borillo, as MO's "Borillo Rush"; SEALs by Stallion; Brutes by
       Driller), and **saboteurs** ride the same way (Ivans by Borillo,
-      SEALs by IFV or Stallion). Engineer drops, sabotage and rushes
-      are one family: who rides, how many, and what they do once out.
+      SEALs by IFV or Stallion). Engineer drops, sabotage, rushes and
+      hero drops are one family: who rides, how many, what they do
+      once out, and which way the transport goes. There are three ways,
+      by land, by air and by sea: a ship that beaches (a naval
+      transport with an amphibious `MovementZone`: Voyager, Zubr,
+      Mandjet, Watercat) carries every one of them too, six stormers
+      where a Borillo seats six and a Stallion's SEALs three.
+    - Across the water: MO's own AI never crossed water with its tanks.
+      Its Voyagers and Zubrs sailed as warships, and no team of its
+      1,200 used a Mandjet or a Watercat. A **landing** loads one such
+      ship with what of a line fits its hold, tanks first (three
+      Bulldogs or Rhinos, two riflemen and an anti-air trooper in
+      twelve seats; two Abrams and nothing else at tier 3), sails to
+      the chosen enemy's farthest power plant or factory (Phobos 10056:
+      from the house's shipyard that is the far side of its base, away
+      from where the lines come in), sets the party down and sends the
+      ship home for the next one. Ashore the party takes vanilla
+      quarries, as a rush does. Six squads a country, at every tier.
+      The engine decides when a team goes by sea (gamemd 0x41FEE0,
+      0x6F1FA0): one with a naval transport and no warship is raised
+      only while its other members cannot reach the chosen enemy's
+      base overland and an amphibious unit can, and one with no ship
+      or aircraft only while they can. So on a map of islands the
+      landings and the drops by sea are all the ground forces a house
+      sends (it had none there before: every line, raid and rush was
+      barred, and only fleets and aircraft went), and on any other map
+      they are never raised.
+    - Air: MO's own AI gave a gunship a hunt by class, a harvester
+      hunt, a post over the base, a patrol and an escort; this AI gave
+      every craft one squadron. Now a craft flies each sortie its
+      weapons and airframe suit: a **squadron** strikes the class it
+      hurts most; a **miner hunt** goes for the harvesters and then
+      the vehicles sent after them (craft that hurt vehicles most and
+      need no pad: Warhawk, Neonwasp, Diverbee); **air support**, a
+      pair of any craft that stays up, flies at whatever is attacking
+      the house (Phobos target 8, the enemies aiming at anything of
+      the house's and those near the leader, nearest first), which is
+      the base while it is attacked and the front while a line is,
+      six answers of a kill each and then home; **air cover** is a
+      pair of anti-air craft posted over the defences as a base-defence
+      team (Rocketeers, Thors, Wolfhounds, Invaders, Buzzards, the
+      Alanqa). Airfield-bound jets keep to strikes: each sortie of
+      theirs needs pads. An **intercept** flight of the side's best
+      air-to-air craft answers each kind of enemy airfield and goes
+      for its aircraft, on their pads too (Phobos target 14); a kill
+      raises its trigger's weight and a flight that ends without one
+      lowers it. The
+      tier's **air strike** takes a craft whose weapon only carries an
+      effect along with its jets (a Cryocopter, a Hummingbird), as MO
+      flew them at what its jets then hit. Air support marks nothing,
+      so its trigger keeps a steady weight: a quiet patrol is no
+      failure.
+    - Specialists: **psychic assaults** send a side's mind controllers
+      out together, as MO did four Adepts or Masterminds at a time
+      (four Adepts, three Elites or two Masterminds with a screen and
+      anti-air): they take the vehicles first, on vanilla quarries
+      since a controller's weapon does no damage for Phobos to judge,
+      and what they take joins the team. A **psychic post** stands two
+      of them by the defences, and sends what they take after the
+      enemy. An **infantry company** (four riflemen, three tank
+      hunters, anti-air and a medic where the side has one) needs only
+      the barracks, so it sets out while the war factory works through
+      the teams ahead of it, and hunts the army rather than walk into
+      a base's defences. Each ground unit whose weapon only carries an
+      effect (the Bulldog painter, Suppressor, Oxidizer, Syncronin,
+      Megalodon, Raccoon) rides two together with four tanks and
+      anti-air, where it had a strike group of four of itself. A
+      **support column** (anti-air, medics or mechanics, a detector
+      and a screen) goes to the farthest of the house's own front-line
+      tanks (Phobos 10060 on a list of them: from home, one at the
+      front), holds beside it, and keeps joining the nearest (10054)
+      six times over. A **miner guard** keeps to the house's nearest
+      harvester, where raids find it away from the watch (Phobos skips
+      a cloaked unit even of its own house, so Epsilon's guard holds at
+      home while its Ghost Miners are cloaked).
     - Charges: a unit that is spent on its target (its primary weapon
       is `Suicide`) or must deploy to fire the only weapon it has
       (`DeployFireWeapon=0`) fills no slot: its one shot is not a
@@ -972,6 +1045,27 @@ profile may stop at any layer but never skips one (a contract test checks
       rushes and one sabotage team reached their building and got out,
       and none was alive 150 seconds later. Twelve posts and two home
       emplacements formed beside four base watches.
+    - With the air sorties, the specialists and the sea (one game
+      each): on land (the same four AIs) 540 teams were created and
+      442 set out. Infantry companies were the readiest of all: 40
+      raised, 38 set out, 28 alive at their mark. Eight air support
+      pairs, four intercept flights and eight support columns were
+      raised and five, three and seven set out; none of their Phobos
+      lines failed to find a target or a tank to join. Two psychic
+      assaults, three specialist squads and a miner hunt were raised
+      among 540, too few to judge. No sea team was raised there, nor
+      on Dueling Islands, whose two bases a land route joins. On Casual
+      Encounter, an Islands map (Russia against USA, with MO's Islands
+      code merged as the client does), the engine raised no line,
+      company or rush and did raise nine landings and nine engineer
+      drops by sea: six of each set out, two engineer drops reached
+      their building, and when Russia fell at frame 40,122 to the
+      USA's fleet and aircraft two landings were under way and three
+      Bulldogs stood on its island. No landing was seen to storm a
+      base that still stood. The USA's interceptors flew 13 times
+      there, nine of them finding no aircraft and marking success all
+      the same; the mark has since been taken out of their script,
+      which has not been played again.
   - Rules in the first wave:
     - **aura**: 19 field emitters (Ultra Dome, Lightning Rod, Repair
       Crane, Iron Guard, Disruptor, Chimera Core, Haze Core, Magnetic
@@ -1314,14 +1408,18 @@ raids, 12 pincer, 13 air strike, 14 feint and strike, 15 base watch
 patrol, 17 tech guard, 18 sky guard, 19 superweapon snipe, 20-25
 capture (a trigger per tech building), garrison, bunkers, bio reactor,
 hijack, 26 spies, 27 drops (engineers from 2701, saboteurs from 2721,
-rushes from 2741; ten more by air), 28 bridge
+rushes from 2741; five more by sea and ten more by air), 28 bridge
 repair, 29 starve, 30-32 navy, 33 flotillas, 34 escorted siege, 35
 Chronosphere, 36 Iron Curtain, 37 boost assaults, 38 blackout assault,
 39 finishing hunt, 40 grid strike, 41 squadrons, 42 heroes, 43 forward
 deployers (4351 on, emplaced at home), 44 bombers, 45 carriers (ten
 numbers a carrier, one a crew), 46 strike groups, 47 charges, 48
-charges under the Iron Curtain, 49 hero drops (4951 on by air), 50-59
-counter triggers, 60-89 counter squads, 99 MCV. A grand line is
+charges under the Iron Curtain, 49 hero drops (4926 on by sea, 4951 on
+by air), 50-59 counter triggers, 60-79 counter squads, 80 air support,
+81 miner hunts, 82 air cover (80 to 82 share a craft's number with its
+squadron), 83 interceptors, 84 landings (ten numbers a target, by
+tier), 85 psychic assaults (8551 on, posts), 86 infantry companies, 87
+specialists with armour, 88 support columns, 89 miner guard, 99 MCV. A grand line is
 numbered 50 past its tier's line (`MNTTT0153RU-G`), and an air snipe 50
 past the snipe by land (1951 on). A two-team call's own lead team carries the call's
 number (`MNTTT1202RU-G` leads Russia's tier-2 pincer). A line, siege or
@@ -1330,7 +1428,8 @@ second-best tier-2 line). Scripts are numbered by kind
 (`MNTSC1000-G`), with the country code when they cast that country's
 superweapons (`MNTSC1000RU-G`); a hero drop's is 72000 plus its
 building's index (`MNTSC72052-G` for the nuclear silo), an air snipe's
-73000 plus it. Their names take the
+73000 plus it, and a support column's 74000 plus the index of the
+`[AITargetTypes]` list it joins. Their names take the
 country's label where MO's name has the side's ("Last Bastion - Condor
 Hunt" for "Foehn - Buzzard Hunt"), and a task force is named by its
 members ("4 Condor"). A house list naming the owner and its allies is `team`.

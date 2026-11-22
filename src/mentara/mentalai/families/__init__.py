@@ -9,7 +9,8 @@ from the rules data, so the same families serve every side.
 from typing import Final
 
 from mentara.mentalai.families._kit import Context, Family, Order
-from mentara.mentalai.families.agents import engineering, infiltration, occupation
+from mentara.mentalai.families.agents import engineering, occupation, spies
+from mentara.mentalai.families.air import air_strikes, interceptors, wings
 from mentara.mentalai.families.assault import (
     lines,
     sieges,
@@ -17,8 +18,9 @@ from mentara.mentalai.families.assault import (
     superweapon_snipes,
 )
 from mentara.mentalai.families.defense import defense
+from mentara.mentalai.families.landing import drops, landings
 from mentara.mentalai.families.naval import flotillas, naval
-from mentara.mentalai.families.raids import air_strikes, raids
+from mentara.mentalai.families.raids import raids
 from mentara.mentalai.families.response import counters, opportunities, redeploy
 from mentara.mentalai.families.roster import (
     bombers,
@@ -27,7 +29,12 @@ from mentara.mentalai.families.roster import (
     deployers,
     heroes,
     leftovers,
-    squadrons,
+)
+from mentara.mentalai.families.specialists import (
+    companies,
+    escorts,
+    psychics,
+    specialists,
 )
 
 __all__ = ["FAMILIES", "Context", "Family", "Order", "leftovers"]
@@ -42,15 +49,22 @@ FAMILIES: Final[tuple[Family, ...]] = (
     defense,
     engineering,
     occupation,
-    infiltration,
+    spies,
+    drops,
+    landings,
     naval,
-    squadrons,
+    wings,
+    interceptors,
     flotillas,
     heroes,
     deployers,
     bombers,
     carriers,
     charges,
+    psychics,
+    companies,
+    specialists,
+    escorts,
     superweapon_assaults,
     counters,
     opportunities,

@@ -1,10 +1,9 @@
 """Every unit its job.
 
 Slots take a side's best units; these families give every other unit a
-squad of its own, so a side fields its whole roster: each strike craft,
-each hero, each unit that deploys forward, each bomb planter, each
-carrier and each charger, and last a strike group for whatever no
-squad has taken.
+squad of its own, so a side fields its whole roster: each hero, each
+unit that deploys forward, each bomb planter, each carrier and each
+charger, and last a strike group for whatever no squad has taken.
 """
 
 from dataclasses import dataclass
@@ -21,7 +20,6 @@ from mentara.mentalai.families._kit import (
     OFF_GROUND,
     OTHER_JOBS,
     RAID,
-    SORTIE,
     TOP,
     Aim,
     Context,
@@ -34,12 +32,9 @@ from mentara.mentalai.families._kit import (
     harm,
     on_call,
     roster,
-    squadron,
     unlocked,
 )
 from mentara.mentalai.families.assault import DIRECT, HUNTING
-from mentara.mentalai.families.defense import SKY_WATCH
-from mentara.mentalai.families.raids import air_script
 from mentara.mentalai.model import (
     Condition,
     Crew,
@@ -60,12 +55,6 @@ from mentara.mentalai.slots import (
     fill,
 )
 lazy from mentara.mentalai.catalog import Firepower
-
-
-def _flies_to_fight(unit: Unit) -> bool:
-    if not unit.has(Role.AIRBORNE) or unit.roles & (OTHER_JOBS | {Role.NAVAL}):
-        return False
-    return bool(unit.roles & (ARMED | {Role.AA}))
 
 
 def _fighting_hero(unit: Unit) -> bool:
@@ -92,30 +81,6 @@ def _armed_carrier(unit: Unit) -> bool:
 
 def _charger(unit: Unit) -> bool:
     return unit.has(Role.CHARGER) and not unit.has(Role.HERO)
-
-
-def squadrons(ctx: Context, country: Country) -> Iterator[Order]:
-    """A squadron per strike craft.
-
-    Airfield-bound craft fly in pairs, one team at a time: each needs a
-    pad. An interceptor holds the sky over the base.
-    """
-    for index, (unit, tier) in enumerate(
-        roster(ctx, country, _flies_to_fight), start=1
-    ):
-        gate = from_tier(country, tier)
-        if gate is None:
-            continue
-        docked = unit.has(Role.DOCKED)
-        squad = Squad(
-            Series.SQUADRON.at(index),
-            f"Squadron {unit.id}",
-            squadron(unit),
-            SKY_WATCH if unit.has(Role.AA_ONLY) else air_script(unit),
-            SORTIE,
-            max_teams=1 if docked else 2,
-        )
-        yield from on_call(squad, gate, 30)
 
 
 _HERO_ESCORT: Final[Seats] = ((ANY_HERO, 1), (FRONT, 2), (SCREEN, 2), (AA, 1))

@@ -94,9 +94,19 @@ class Series(Enum):
     CURTAIN_CHARGE = 48
     HERO_DROP = 49
     # One trigger per notable enemy unit, and one squad per armour and
-    # tier: both run past their hundred.
+    # tier: both run past their hundred, the squads as far as 79.
     COUNTER_CALL = 50
     COUNTER = 60
+    AIR_SUPPORT = 80
+    MINER_HUNT = 81
+    AIR_COVER = 82
+    INTERCEPT = 83
+    LANDING = 84
+    PSYCHIC = 85
+    COMPANY = 86
+    SPECIALIST = 87
+    ESCORT = 88
+    MINER_GUARD = 89
     YARD = 99
 
     def at(self, place: int = 0) -> int:
@@ -310,6 +320,13 @@ GUARD: Final[Conduct] = Conduct(
 WATCH: Final[Conduct] = replace(GUARD, base_defense=True)
 # Flies to its target past what it meets.
 SORTIE: Final[Conduct] = Conduct(aggressive=False, avoid_threats=True)
+# Flies at what threatens the house, from the base or the front.
+AIR_SUPPORT: Final[Conduct] = Conduct(recruiter=True)
+# Crosses the water and lands behind the chosen enemy's base; the
+# empty transport sails home.
+LANDING: Final[Conduct] = replace(FLANK, transports_return=True)
+# Goes where the house's forward units are and works beside them.
+ESCORT: Final[Conduct] = Conduct(recruiter=True, annoyance=True)
 # Flies now: it takes the craft it needs out of the squadron that has
 # them, as MO's own aircraft did against a superweapon.
 SCRAMBLE: Final[Conduct] = replace(SORTIE, urgent=True)

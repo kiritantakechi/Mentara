@@ -166,6 +166,9 @@ NumberOfDocks=4
 13=SUB
 14=IFV
 15=APC
+16=GUNSHIP
+17=HOVER
+18=PAINTER
 
 [SuperWeaponTypes]
 0=CurtainSW
@@ -214,6 +217,41 @@ Cost=1200
 Strength=200
 Armor=jet
 Primary=Cannon
+
+; Stays in the air without a pad, and fights tanks and aircraft.
+[GUNSHIP]
+TechLevel=5
+Owner=Alpha
+Prerequisite=ANYWEAP,RADR
+JumpJet=yes
+Cost=1500
+Strength=150
+Armor=jet
+Primary=Cannon
+Secondary=FlakGun
+
+; A ship that beaches: it carries tanks across the water.
+[HOVER]
+TechLevel=2
+Owner=Alpha
+Prerequisite=DOCK
+Naval=yes
+MovementZone=Amphibious
+Passengers=12
+SizeLimit=6
+Cost=1000
+Strength=800
+Armor=heavy
+
+; Marks targets for the others; its weapon does no damage.
+[PAINTER]
+TechLevel=2
+Owner=Alpha
+Prerequisite=ANYWEAP
+Cost=700
+Strength=300
+Armor=light
+Primary=Mark
 
 ; A player's unit; Ares hands the AI its twin instead.
 [PROTO]
@@ -513,6 +551,17 @@ Range=12
 MinimumRange=3
 Projectile=Lob
 Warhead=HE
+
+[Mark]
+Damage=1
+ROF=60
+Range=6
+Projectile=Bullet
+Warhead=Daze
+
+[Daze]
+EMP.Duration=100
+Verses=0%,0%,0%,0%,0%,0%,0%,0%,0%,0%,0%
 
 [Bullet]
 AG=yes
@@ -1228,6 +1277,153 @@ def test_a_deployer_also_digs_in_at_home(fielded: Fielded) -> None:
     emplace = fielded.named["Emplace OUTPOST"]
     assert fielded.crew(emplace) == ((2, "OUTPOST"),)
     assert fielded.lines(emplace) == ((10053, 7), (9, 0), (49, 0))
+
+
+def test_a_craft_flies_each_sortie_that_suits_it(
+    fielded: Fielded, catalog: Catalog
+) -> None:
+    # MO's own AI gave a gunship a hunt by class, a harvester hunt, a
+    # post over the base and a patrol; a jet, which must return to its
+    # pad, only strikes.
+    assert not catalog.units["gunship"].has(Role.DOCKED)
+    gunship = {n for n in fielded.named if n.endswith(" GUNSHIP")}
+    assert gunship == {
+        "Squadron GUNSHIP",
+        "Miner Hunt GUNSHIP",
+        "Air Support GUNSHIP",
+        "Air Cover GUNSHIP",
+    }
+    assert {n for n in fielded.named if n.endswith(" JET")} == {"Squadron JET"}
+    # The harvesters first, the vehicles sent after them, then the mark.
+    hunt = fielded.lines(fielded.named["Miner Hunt GUNSHIP"])
+    assert hunt.index((0, 3)) < hunt.index((0, 5)) < hunt.index((49, 0))
+    # Support answers what threatens the house, one kill at a time,
+    # each answer under a clock. It marks nothing: a quiet patrol is
+    # no failure, and its trigger keeps its weight.
+    support = fielded.named["Air Support GUNSHIP"]
+    assert fielded.crew(support) == ((2, "GUNSHIP"),)
+    lines = fielded.lines(support)
+    assert lines[:4] == ((16001, 90), (10001, 8), (16002, 0), (10100, 20))
+    assert lines.count((10001, 8)) == 6
+    assert all(call.steady for call in fielded.calls(support))
+    # Cover is a base-defence team over the defences, as a post is.
+    cover = fielded.named["Air Cover GUNSHIP"]
+    assert cover.conduct.base_defense
+    assert fielded.lines(cover) == fielded.lines(fielded.named["Defence Post T2"])
+
+
+def test_interceptors_answer_each_kind_of_enemy_airfield(fielded: Fielded) -> None:
+    # The best air-to-air craft goes for the enemy's aircraft, on
+    # their pads included (Phobos target type 14).
+    intercept = fielded.named["Intercept"]
+    assert fielded.crew(intercept) == ((4, "GUNSHIP"),)
+    assert [call.gate for call in fielded.calls(intercept)] == [Gate.enemy_owns("AIRF")]
+    # A kill pays and nothing marks success: a flight that finds no
+    # aircraft ends its line at once, and must not be paid for that.
+    assert fielded.lines(intercept) == (
+        (14000, 10),
+        (16001, 600),
+        (10000, 14),
+        (16002, 0),
+    )
+    assert not any(call.steady for call in fielded.calls(intercept))
+
+
+def test_a_landing_party_crosses_to_the_far_side_of_the_base(
+    fielded: Fielded, catalog: Catalog
+) -> None:
+    # MO's AI never crossed water with its tanks. A hover transport
+    # that beaches takes what of a line fits it, tanks first, to the
+    # enemy's farthest building of a class and goes home empty.
+    hover = catalog.units["hover"]
+    assert hover.has(Role.NAVAL, Role.TRANSPORT, Role.AMPHIBIOUS)
+    landing = fielded.named["Landing vs Power T2"]
+    crew = fielded.crew(landing)
+    assert crew == ((3, "TANK"), (2, "GI"), (1, "FLAK"), (1, "HOVER"))
+    sizes = sum(count * catalog.units[unit.lower()].size for count, unit in crew[:-1])
+    assert sizes <= hover.passengers
+    assert landing.conduct.transports_return
+    assert landing.conduct.enemy_only
+    lines = fielded.lines(landing)
+    load, sail, out, storm, success = (
+        lines.index(line) for line in ((14, 0), (10056, 9), (8, 2), (0, 9), (49, 0))
+    )
+    assert load < sail < out < storm < success
+    assert not attacks_by_phobos(lines)
+    # Every drop also goes by sea, with the same script as by land.
+    for by_sea, by_land in (
+        ("Sea Assault vs Factory", "Rush vs Factory"),
+        ("Sea Sabotage vs Power", "Sabotage vs Power"),
+        ("Sea Drop vs Yard", "Engineer Drop vs Yard"),
+        ("Hero Sea Drop vs SILO", "Hero Drop vs SILO"),
+    ):
+        team = fielded.named[by_sea]
+        assert "HOVER" in fielded.units(team)
+        assert team.script == fielded.named[by_land].script
+    # A ship takes the six a rush may have; a carrier seats four.
+    assert (6, "BAZ") in fielded.crew(fielded.named["Sea Assault vs Factory"])
+
+
+def test_mind_controllers_go_out_together_and_guard_the_defences(
+    fielded: Fielded,
+) -> None:
+    # MO sent its Adepts and Masterminds out four at a time and stood
+    # them by its towers. What an assault takes joins it; what a post
+    # takes goes after the enemy.
+    assault = fielded.named["Psychic PSI"]
+    assert fielded.crew(assault) == ((4, "PSI"), (2, "GI"), (1, "FLAK"))
+    assert assault.conduct.mind_control is MindControl.JOIN_TEAM
+    lines = fielded.lines(assault)
+    assert lines.index((0, 5)) < lines.index((49, 0)) < lines.index((0, 4))
+    assert not attacks_by_phobos(lines)
+    post = fielded.named["Psychic Post PSI"]
+    assert fielded.crew(post) == ((2, "PSI"),)
+    assert post.conduct.base_defense
+    assert post.conduct.mind_control is MindControl.HUNT
+    assert fielded.lines(post)[0] == (10053, 7)
+
+
+def test_an_infantry_company_needs_only_the_barracks(
+    fielded: Fielded, catalog: Catalog
+) -> None:
+    # Riflemen, tank hunters and a medic: no member waits for the war
+    # factory. It hunts the army, as the hunting line does.
+    company = fielded.named["Company T1"]
+    assert fielded.crew(company) == ((4, "GI"), (3, "BAZ"), (1, "MEDIC"))
+    assert all(
+        catalog.units[unit.lower()].factory is Factory.BARRACKS
+        for unit in fielded.units(company)
+    )
+    assert company.script == fielded.named["Hunt T1"].script
+
+
+def test_an_unarmed_specialist_rides_with_armour(fielded: Fielded) -> None:
+    # A painter does nothing alone: MO paired each of its own with
+    # tanks, and the tanks lead.
+    support = fielded.named["Support PAINTER"]
+    assert fielded.crew(support) == ((4, "TANK"), (1, "FLAK"), (2, "PAINTER"))
+    assert support.script == fielded.named["Line T1"].script
+    assert "Strike Group PAINTER" not in fielded.named
+
+
+def test_a_support_column_joins_the_forward_tanks(fielded: Fielded) -> None:
+    # Anti-air, medics and a screen go to the farthest of the house's
+    # own front-line tanks (Phobos 10060), which from home is one at
+    # the front, then keep to the nearest (10054).
+    column = fielded.named["Support Column T2"]
+    assert fielded.crew(column) == ((2, "GI"), (2, "FLAK"), (2, "MEDIC"))
+    lines = fielded.lines(column)
+    ((_, front),) = {line for line in lines if line[0] == 10060}
+    assert fielded.plan.target_lists[front] == ("TANK", "TWIN")
+    assert lines.index((10060, front)) < lines.index((10054, front))
+    assert lines.count((10054, front)) == 6
+    assert lines.count((10100, 30)) == 7
+
+
+def test_a_guard_keeps_to_the_harvesters(fielded: Fielded) -> None:
+    guard = fielded.named["Miner Guard"]
+    assert fielded.lines(guard) == ((10053, 3), (10100, 60), (6, 1))
+    assert not guard.conduct.base_defense
 
 
 def test_two_team_calls_pair_their_teams(fielded: Fielded) -> None:

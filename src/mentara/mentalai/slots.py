@@ -24,6 +24,8 @@ lazy from mentara.mentalai.model import Crew
 __all__ = [
     "AA",
     "AIR",
+    "AIR_EFFECT",
+    "AIR_TRANSPORT",
     "ANY_HERO",
     "ARTILLERY",
     "BOMBER",
@@ -36,6 +38,8 @@ __all__ = [
     "HERO",
     "HIJACKER",
     "INFANTRY",
+    "INTERCEPTOR",
+    "MEDIC",
     "NAVAL_AA",
     "NAVAL_ARTILLERY",
     "NAVAL_FRONT",
@@ -43,12 +47,14 @@ __all__ = [
     "OCCUPIER",
     "RAIDER",
     "SCREEN",
+    "SEA_TRANSPORT",
     "SIEGE",
     "SKY_GUARD",
     "SPY",
     "STEALTH",
     "STRIKER",
     "SUPPORT",
+    "TANK_HUNTER",
     "TRANSPORT",
     "Seats",
     "Slot",
@@ -260,6 +266,26 @@ SUPPORT: Final[Slot] = Slot(
     _cheapest,
     rank=4,
 )
+# Heals the infantry beside it.
+MEDIC: Final[Slot] = Slot(
+    "medic",
+    lambda u: _fighter(u) and u.kind is Kind.INFANTRY and u.has(Role.HEALER),
+    _cheapest,
+    rank=4,
+)
+# Infantry that stops armour, for a team with no tank in it.
+TANK_HUNTER: Final[Slot] = Slot(
+    "tank hunter",
+    lambda u: (
+        u.kind is Kind.INFANTRY
+        and _fighter(u)
+        and u.has(Role.GUN)
+        and u.firepower.vehicle > 0
+        and not u.has(Role.HERO)
+    ),
+    lambda u, _t: u.firepower.vehicle * _vitality(u) / _cost(u),
+    rank=8,
+)
 DETECTOR: Final[Slot] = Slot(
     "detector",
     lambda u: (
@@ -321,6 +347,29 @@ AIR: Final[Slot] = Slot(
     lambda u, _t: (
         max(u.firepower.infantry, u.firepower.vehicle, u.firepower.building) / _cost(u)
     ),
+    rank=8,
+)
+# A craft whose weapon carries an effect and no damage: it flies with
+# the craft that do the damage.
+AIR_EFFECT: Final[Slot] = Slot(
+    "air effect",
+    lambda u: (
+        u.has(Role.AIRBORNE, Role.EFFECT)
+        and not u.roles & (_NON_COMBAT | {Role.GUN, Role.HERO, Role.NAVAL})
+    ),
+    lambda u, _t: _vitality(u) / _cost(u),
+    rank=4,
+)
+# The craft that shoots most aircraft down for its cost, and catches
+# them.
+INTERCEPTOR: Final[Slot] = Slot(
+    "interceptor",
+    lambda u: (
+        u.has(Role.AIRBORNE)
+        and u.firepower.air > 0
+        and not u.roles & (_NON_COMBAT | {Role.HERO, Role.NAVAL, Role.TRANSPORT})
+    ),
+    lambda u, _t: u.firepower.air * u.speed / _cost(u),
     rank=8,
 )
 # Leads a fleet against the shore: a ship that cannot hurt a building
@@ -408,6 +457,25 @@ TRANSPORT: Final[Slot] = Slot(
         and not u.roles & _NON_COMBAT
     ),
     lambda u, _t: u.passengers * u.speed * _vitality(u) / _cost(u),
+    rank=5,
+)
+# An aircraft that carries infantry: the faster and roomier the better.
+AIR_TRANSPORT: Final[Slot] = Slot(
+    "air transport",
+    lambda u: u.has(Role.AIRBORNE, Role.TRANSPORT) and u.size_limit > 0,
+    lambda u, _t: u.passengers * u.speed,
+    rank=5,
+)
+# A ship that beaches: it carries a landing party across the water and
+# sets it down on the shore.
+SEA_TRANSPORT: Final[Slot] = Slot(
+    "sea transport",
+    lambda u: (
+        u.has(Role.NAVAL, Role.TRANSPORT, Role.AMPHIBIOUS)
+        and u.size_limit > 0
+        and not u.roles & _NON_COMBAT
+    ),
+    TRANSPORT.score,
     rank=5,
 )
 
