@@ -1070,8 +1070,8 @@ profile may stop at any layer but never skips one (a contract test checks
       instant shell instead of one dropped from the sky.
     - **ai-superweapon**: seven superweapons MO kept from the AI (AI
       targeting `None`) get the targeting MO already gives the same kind
-      of delivery: Instant Shelter and the Repair Drones land at the base
-      centre when it is attacked (as the Disruptor does), the Kingsnake
+      of delivery: Instant Shelter and the Repair Drones land around the
+      base when it is attacked, the Kingsnake
       nest at its platform when attacked (as Elite Reserves), the Sweeper
       drop at the favourite enemy's base (as Tank Drop), naval mines on
       enemy vessels near the AI's yards (as the MAD Mine), and the Decoy
@@ -1081,9 +1081,16 @@ profile may stop at any layer but never skips one (a contract test checks
       Phobos 0.5's fix of vanilla leaving them on Guard while its
       paradropped infantry hunted. Quick Fort (a bunker that MO's AI
       mans only through rare one-unit bunker teams), Raven, Vision,
-      Zephyr Beacon and Golden Wind stay player-only. Risks the AI accepts: Repair Drones pile up at a
-      base that is often attacked, and a Kingsnake nest hunts the
-      attackers for its lifetime.
+      Zephyr Beacon and Golden Wind stay player-only. Shelters and
+      drones use `DropPod` targeting: a random direction, one to two
+      base radii from the base centre (the engine holds the radius
+      between 3 and 8 cells). MO's Disruptor lands on the centre cell
+      itself (`Base`), which suits an aura that wears out; a shelter or
+      a drone stays for good, and on that cell each took the free place
+      nearest the last, so the pile grew around the war factory. Risks
+      the AI accepts: Repair Drones gather around a base that is often
+      attacked, and a Kingsnake nest hunts the attackers for its
+      lifetime.
   - Rules in the fifth wave:
     - **base-centre**: 30 buildings placed out in the field, 21 that a
       superweapon drops (beacons, towers, shelters, minefields) and 9
@@ -1162,6 +1169,15 @@ profile may stop at any layer but never skips one (a contract test checks
       Not seen: the Sweepers deploying (Phobos' own auto-deploy uses the
       same Unload mission), the Decoy Squadron (its team did not form in
       time), naval mines (the map has no water) and Kingsnakes (US only).
+    - Shelters and drones around the base: a Russian Mental AI aiming
+      both at its base centre had about ten shelters ringing its war
+      factory 46 minutes into a four-player game. Aiming them with
+      `DropPod`, two games against the USA show its shelters spread
+      over the outer base and the ground around the war factory open.
+      It fired Instant Shelter 10 and 5 times, and in the second game,
+      the one with the drones on `DropPod` too, the drone powers 8
+      times, so the constraint and the paradrop work with that
+      targeting. Not singled out on screen: the drones themselves.
     - Fifth wave: Hijackers the AI drops on a human base steal one of four
       parked tanks, which shells its old owner's Construction Yard, and
       bomb the rest. Quick Forts the AI drops when attacked stay empty:
