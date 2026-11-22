@@ -17,6 +17,7 @@ from mentara.mentalai.families._kit import (
     COUNTER,
     FLANK,
     HUNTER,
+    SCRAMBLE,
     TIERS,
     TOP,
     ByTier,
@@ -27,6 +28,7 @@ from mentara.mentalai.families._kit import (
     answering,
     at_tier,
     on_call,
+    squadron,
     variants_of,
 )
 from mentara.mentalai.model import (
@@ -38,6 +40,7 @@ from mentara.mentalai.model import (
 from mentara.mentalai.scripts import Lines, Quarry, Script
 from mentara.mentalai.slots import (
     AA,
+    AIR,
     ARTILLERY,
     CONTROLLER,
     DETECTOR,
@@ -48,6 +51,7 @@ from mentara.mentalai.slots import (
     SIEGE,
     SUPPORT,
     Seats,
+    Slot,
     fill,
 )
 
@@ -118,6 +122,12 @@ _LINE_COMBOS: Final[tuple[Combo, ...]] = (
     ),
 )
 _LINE_TEAMS_MAX: Final[int] = 3
+# A grand line is two lines as one team: it takes as long to build as
+# two, and arrives as one.
+_GRAND_LINES: Final[int] = 2
+# It is numbered this far past its tier's line.
+_GRAND_PLACE: Final[int] = 50
+_GRAND_WEIGHTS: Final[ByTier] = (0, 40, 60)
 
 
 def lines(ctx: Context, country: Country) -> Iterator[Order]:
@@ -149,6 +159,31 @@ def lines(ctx: Context, country: Country) -> Iterator[Order]:
                 yield from on_call(squad, gate, weight)
         for combo in _LINE_COMBOS:
             yield from combo.calls(tier, gate)
+        yield from _grand_line(units, tier, gate, casts)
+
+
+def _grand_line(
+    units: tuple[Unit, ...], tier: int, gate: Gate, casts: tuple[int, ...]
+) -> Iterator[Order]:
+    """Two lines' worth of members that gather and go in as one team.
+
+    Teams leave as they fill, one at a time, and a base's defences take
+    them one at a time; a team twice the size meets them all at once.
+    """
+    weight = _GRAND_WEIGHTS[tier - 1]
+    seats = tuple((slot, count * _GRAND_LINES) for slot, count in _LINE_SEATS[tier])
+    crew = fill(seats, units, tier, required=(FRONT,))
+    if not weight or crew is None:
+        return
+    squad = Squad(
+        Series.LINE.at(_GRAND_PLACE + tier),
+        f"Grand Line T{tier}",
+        crew,
+        DIRECT.script(casts),
+        DIRECT.doctrine,
+        max_teams=1,
+    )
+    yield from on_call(squad, gate, weight)
 
 
 _SIEGE_SEATS: Final[Seats] = ((SIEGE, 3), (FRONT, 2), (SCREEN, 2), (AA, 1))
@@ -190,7 +225,16 @@ def sieges(ctx: Context, country: Country) -> Iterator[Order]:
 
 
 def superweapon_snipes(ctx: Context, country: Country) -> Iterator[Order]:
-    """When the enemy owns a superweapon, a siege group goes for it."""
+    """When the enemy owns a superweapon, it is gone for.
+
+    A siege group by land, which waits its turn at the factories, and
+    the side's bombers by air, which do not wait at all.
+    """
+    yield from _ground_snipe(ctx, country)
+    yield from _air_snipes(ctx, country)
+
+
+def _ground_snipe(ctx: Context, country: Country) -> Iterator[Order]:
     seats: Seats = ((FRONT, 3), (SIEGE, 2), (AA, 1))
     crew = fill(seats, ctx.fielded(country, TOP), TOP, required=(FRONT,))
     if crew is None:
@@ -204,6 +248,48 @@ def superweapon_snipes(ctx: Context, country: Country) -> Iterator[Order]:
         for building in ctx.superweapon_buildings
     )
     yield from answering(squad, gates, 60)
+
+
+# The aircraft that will have done a building the most harm by the time
+# it is shot down.
+_BOMBER_CRAFT: Final[Slot] = Slot(
+    "bomber craft",
+    lambda u: AIR.fits(u) and u.firepower.building > 0,
+    lambda u, _t: u.firepower.building * u.strength,
+    rank=AIR.rank,
+)
+# An air snipe is numbered this far past the snipe by land, and its
+# script by its building's index, from the code.
+_AIR_SNIPE_PLACE: Final[int] = 50
+_AIR_SNIPE_CODE: Final[int] = 73000
+
+
+def _air_snipes(ctx: Context, country: Country) -> Iterator[Order]:
+    """The side's bombers at each superweapon the enemy owns.
+
+    MO's own Mental AI sent four Barracudas, two Kirovs or four
+    Basilisks, at a higher priority than its other teams, and so does
+    this: a squadron takes its craft out of whichever team flies them
+    and goes at once.
+    """
+    bombers = fill(((_BOMBER_CRAFT, 1),), ctx.fielded(country, TOP), TOP)
+    if bombers is None:
+        return
+    crew = squadron(bombers[0].unit)
+    for place, building in enumerate(ctx.superweapon_buildings, start=1):
+        index = ctx.catalog.building_index(building)
+        script = Script(
+            _AIR_SNIPE_CODE + index, f"Air Snipe {building}", sc.air_snipe(index)
+        )
+        squad = Squad(
+            Series.SNIPE.at(_AIR_SNIPE_PLACE + place),
+            script.name,
+            crew,
+            script,
+            SCRAMBLE,
+            max_teams=1,
+        )
+        yield from on_call(squad, Gate.enemy_owns(building), 60)
 
 
 # What the Chronosphere drops a team beside, and what that is called.

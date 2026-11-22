@@ -28,21 +28,29 @@ _TRIGGER_TECH_LEVEL: Final[int] = 1
 # How the engine spells "no object" and a flag.
 _NONE: Final[str] = "<none>"
 _FLAG: Final[Mapping[bool, str]] = frozendict({True: "yes", False: "no"})
-# One priority for every team: a higher one takes members out of
-# running teams of a lower one (see `Conduct`).
-_PRIORITY: Final[int] = 5
+# One priority for every team but the urgent ones: a higher one takes
+# members out of running teams of a lower one (see `Conduct`).
+_PRIORITY: Final[Mapping[bool, int]] = frozendict({False: 5, True: 6})
 # Turnover. The AI builds for its oldest unfilled team first and hands
 # each new unit to the oldest team that wants it (gamemd 0x55B502 walks
 # the teams in creation order; Phobos `UpdateVehicleProduction`), so a
-# team waits while every older one fills. The cap on teams at once
-# (Hard, Normal, Easy; MO's is 100,75,50 for teams half the size) keeps
-# that wait short; an empty team keeps its turn three times as long as
-# MO's 5000 frames, or a squad of one contended type is dissolved
-# before its first member comes; and members of an ended team join
+# team waits while every older one fills. A house rolls for a new team
+# far faster than its factories fill one, so it always stands at the
+# cap on teams at once (Hard, Normal, Easy; MO's is 100,75,50 for teams
+# half the size), and the cap is how many teams deep that wait is: in
+# play a team with vehicles set out some 60 teams after its roll at a
+# cap of 80, 36 at 40 and 26 at 30, and no fewer lines set out at the
+# lower caps: the factories bound the army, the cap only the wait. A
+# long wait fields what the house rolled a tier ago and answers the
+# enemy late. An empty team is dissolved after a delay and raised
+# again at the back of the queue, and a squad of vehicles alone stays
+# empty until its turn, some 15000 frames at this cap: at MO's 5000
+# next to none of them set out, at 15000 about half (4 of 16 and 11 of
+# 19 economy raids), at 30000 15 of 17. Members of an ended team join
 # other teams (Phobos) instead of idling.
 _GENERAL: Final[tuple[tuple[str, str], ...]] = (
-    ("TotalAITeamCap", "80,60,40"),
-    ("DissolveUnfilledTeamDelay", "15000"),
+    ("TotalAITeamCap", "40,30,20"),
+    ("DissolveUnfilledTeamDelay", "30000"),
     ("SetRecruitableOnLiberate", "1"),
 )
 
@@ -193,7 +201,7 @@ def _team(team: TeamType) -> str:
         ("LooseRecruit", "no"),
         ("Aggressive", _FLAG[conduct.aggressive]),
         ("Suicide", _FLAG[conduct.suicide]),
-        ("Priority", str(_PRIORITY)),
+        ("Priority", str(_PRIORITY[conduct.urgent])),
         ("Max", str(team.max_teams)),
         ("TechLevel", "0"),
         ("Group", "-1"),

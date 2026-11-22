@@ -91,6 +91,7 @@ class Series(Enum):
     STRIKE_GROUP = 46
     CHARGE = 47
     CURTAIN_CHARGE = 48
+    HERO_DROP = 49
     # One trigger per notable enemy unit, and one squad per armour and
     # tier: both run past their hundred.
     COUNTER_CALL = 50
@@ -306,7 +307,11 @@ GUARD: Final[Conduct] = Conduct(
     annoyance=True, reinforce=True, mind_control=MindControl.HUNT
 )
 WATCH: Final[Conduct] = replace(GUARD, base_defense=True)
+# Flies to its target past what it meets.
 SORTIE: Final[Conduct] = Conduct(aggressive=False, avoid_threats=True)
+# Flies now: it takes the craft it needs out of the squadron that has
+# them, as MO's own aircraft did against a superweapon.
+SCRAMBLE: Final[Conduct] = replace(SORTIE, urgent=True)
 # --- Squads and their calls ------------------------------------------
 
 # The rating of a squad's only member type: among its own kind any
@@ -317,6 +322,16 @@ _SOLO_RANK: Final[int] = 8
 def alone(unit: Unit, count: int) -> Crew:
     """A crew of one unit type."""
     return (Member(count, unit, _SOLO_RANK),)
+
+
+# Airfield-bound craft fly in pairs: each needs a pad.
+_FLIGHT: Final[int] = 4
+_DOCKED_FLIGHT: Final[int] = 2
+
+
+def squadron(craft: Unit) -> Crew:
+    """A squadron's worth of one aircraft type."""
+    return alone(craft, _DOCKED_FLIGHT if craft.has(Role.DOCKED) else _FLIGHT)
 
 
 def on_call(squad: Squad, gate: Gate, weight: int) -> Iterator[Order]:

@@ -36,6 +36,7 @@ __all__ = [
     "Script",
     "Target",
     "absorb",
+    "air_snipe",
     "air_strike",
     "blitz",
     "bombing",
@@ -65,6 +66,8 @@ __all__ = [
     "power_raid",
     "redeploy",
     "siege",
+    "stand_guard",
+    "strike_drop",
     "superweapon_snipe",
     "tank_bunker",
     "tech_guard",
@@ -118,6 +121,8 @@ class _Action(IntEnum):
     DEPLOY = 9
     MISSION = 11
     LOAD = 14
+    ATTACK_BUILDING = 46  # the enemy's, by building type
+    MOVE_TO_BUILDING = 47
     SUCCESS = 49
     GATHER_AT_ENEMY = 53
     REGROUP_AT_BASE = 54
@@ -149,6 +154,9 @@ class _Action(IntEnum):
 _ONCE: Final[int] = 1
 _HUNT_MISSION: Final[int] = 15
 _UNLOAD_KEEP_PASSENGERS: Final[int] = 2  # lose transports, keep units
+# Vanilla 46 and 47 take a building type's index, and in the high word
+# which of the enemy's to choose: this is the nearest.
+_NEAREST: Final[int] = 2 << 16
 _ALL_ARRIVE: Final[int] = 2  # Phobos 12002: every member arrives
 # Seconds.
 _STAGE_TIMEOUT: Final[int] = 90
@@ -157,8 +165,11 @@ _PUSH_PAUSE: Final[int] = 8
 _ARRIVAL_FIGHT: Final[int] = 8
 _CAST_TIMEOUT: Final[int] = 10
 _FLANK_TIMEOUT: Final[int] = 150
-_DROP_TIMEOUT: Final[int] = 120
+_AGENT_TIMEOUT: Final[int] = 120
 _WATCH: Final[int] = 60
+# A guard an enemy's units call out stands this long; its trigger
+# raises it again while they are still there.
+_STAND: Final[int] = 600
 _PATROL_STOP: Final[int] = 30
 _AGENT_RETRY: Final[int] = 30
 _COUNTER_PAUSE: Final[int] = 10
@@ -331,7 +342,9 @@ class _Draft:
         return self
 
     def maybe(self, percent: int, *block: Line) -> _Draft:
-        """Run a block with a chance in percent."""
+        """Run a block with a chance in percent; none leaves it out."""
+        if percent <= 0:
+            return self
         after = len(self.lines) + 2 + len(block)
         return self.then(
             (_Action.SKIP_CHANCE, percent),
@@ -696,8 +709,24 @@ def air_strike(first: Quarry, second: Quarry) -> Lines:
 
 
 def watch(casts: tuple[int, ...]) -> Lines:
-    """Guard the base front, casting home superweapons each round."""
+    """Guard the base front, casting home superweapons each round.
+
+    The standing watch: it never ends, and the engine caps how many
+    such teams a house keeps (`MaximumAIDefensiveTeams`).
+    """
     return (_REGROUP, *_casts(casts), _guard(_WATCH), _jump(2))
+
+
+def stand_guard() -> Lines:
+    """Hold the base for a spell, then stand down.
+
+    For a guard that answers something the enemy fields. One that
+    looped for good kept its place under the team cap and its members
+    out of every other team long after the enemy had lost what it
+    answered; this one ends, and its trigger raises it again while the
+    enemy still owns the thing.
+    """
+    return (_REGROUP, _guard(_STAND))
 
 
 def patrol() -> Lines:
@@ -746,25 +775,27 @@ def redeploy() -> Lines:
 
 def capture_tech() -> Lines:
     """Engineers take the nearest tech building, one after another."""
-    return _tries(*_timed(_DROP_TIMEOUT, _strike(Target.TECH, once=True)))
+    return _tries(*_timed(_AGENT_TIMEOUT, _strike(Target.TECH, once=True)))
 
 
 def bridge_repair() -> Lines:
-    """An engineer mends the nearest broken bridge, or waits for one."""
-    return (
-        _strike(Target.BROKEN_BRIDGE_HUT, once=True),
-        _guard(_AGENT_RETRY),
-        _jump(1),
-    )
+    """An engineer mends the nearest broken bridge, if one is down.
+
+    It looks a few times and is free again: with every bridge whole
+    the line finds no hut and ends at once.
+    """
+    return _tries(*_timed(_AGENT_TIMEOUT, _strike(Target.BROKEN_BRIDGE_HUT, once=True)))
 
 
 def infiltrate(target: Target) -> Lines:
     """A spy enters the nearest building of a class.
 
     Each try is skipped with a chance, so spies do not all set out the
-    moment they are trained.
+    moment they are trained, and runs under a clock: a spy that cannot
+    reach its building does not hold its team for good.
     """
-    return _tries((_Action.SKIP_CHANCE, _SPY_SKIP_PERCENT), _strike(target, once=True))
+    wait = (_Action.SKIP_CHANCE, _SPY_SKIP_PERCENT)
+    return _tries(*_timed(_AGENT_TIMEOUT, wait, _strike(target, once=True)))
 
 
 def drop(target: Target) -> Lines:
@@ -773,15 +804,53 @@ def drop(target: Target) -> Lines:
     Vanilla 14 seats the passengers and saves the transport's place, so
     with `TransportsReturnOnUnload` vanilla 8,2 sends the empty
     transport home to serve again (Phobos 10103 saves no place). The
-    agents on the ground by their target are the success.
+    agents on the ground by their target are the success: one that
+    gets in is spent.
     """
     return (
         _LOAD,
         (_Action.MOVE_DISTANCE, _DROP_DISTANCE),
-        *_timed(_DROP_TIMEOUT, (_Action.MOVE_TO_ENEMY, target)),
+        *_timed(_AGENT_TIMEOUT, (_Action.MOVE_TO_ENEMY, target)),
         _UNLOAD,
         _SUCCESS,
         _strike(target, once=True),
+    )
+
+
+def _wreck(building: int) -> Lines:
+    """Wreck the enemy's nearest building of a type, then the rest.
+
+    Vanilla lines, which name the building by its index, as MO's own
+    answers to a superweapon do. Alive when the building is down or the
+    clock runs out is the success.
+    """
+    return (
+        *_proven(_RAID_PROOF, (_Action.ATTACK_BUILDING, _NEAREST | building)),
+        _attack(Quarry.STRUCTURES),
+        *_MOP_UP,
+    )
+
+
+def air_snipe(building: int) -> Lines:
+    """Aircraft go straight for a type of building."""
+    return _wreck(building)
+
+
+def strike_drop(building: int) -> Lines:
+    """Fighters ride in beside a type of building and wreck it.
+
+    MO's own answer to a superweapon: a hero set down next to it. A
+    Phobos line could not do it: Phobos keeps a team's leader while it
+    lives, a transport that has left the team included
+    (`Mission.Attack.cpp`), and after a Phobos ride would pick the
+    hero's targets with the transport's weapon: none, for an unarmed
+    one.
+    """
+    return (
+        _LOAD,
+        *_timed(_AGENT_TIMEOUT, (_Action.MOVE_TO_BUILDING, _NEAREST | building)),
+        _UNLOAD,
+        *_wreck(building),
     )
 
 

@@ -341,12 +341,29 @@ class Catalog:
         tech_buildings: Buildings no country builds that an engineer
             takes (`Capturable`, `NeedsEngineer`): the map's tech.
         bridge_huts: Buildings an engineer enters to mend a bridge.
+        building_types: Every building type, lower-case, in the
+            engine's registry order.
     """
 
     units: Mapping[str, Unit]
     countries: tuple[Country, ...]
     tech_buildings: tuple[str, ...]
     bridge_huts: tuple[str, ...]
+    building_types: tuple[str, ...]
+
+    def building_index(self, building: str) -> int:
+        """A building type's index in the engine's registry.
+
+        A vanilla script line names a building type by it (MO's own
+        scripts decode to the buildings their names say).
+
+        Args:
+            building: The building's ID.
+
+        Returns:
+            Its index.
+        """
+        return self.building_types.index(building.lower())
 
     def fielded(self, country: Country, tier: int) -> tuple[Unit, ...]:
         """The units a country can field by a tier, in registry order.
@@ -388,7 +405,8 @@ def build_catalog(rules: IniData) -> Catalog:
         if rules.flag(country, "Multiplay")
     )
     owned = frozenset(b for country in countries for b in country.buildings)
-    buildings = [b for b in rules.type_list("BuildingTypes") if rules.has(b)]
+    registry = rules.type_list("BuildingTypes")
+    buildings = [b for b in registry if rules.has(b)]
     return Catalog(
         units=units,
         countries=countries,
@@ -402,6 +420,7 @@ def build_catalog(rules: IniData) -> Catalog:
         bridge_huts=tuple(
             rules.name(b) for b in buildings if rules.flag(b, "BridgeRepairHut")
         ),
+        building_types=tuple(b.lower() for b in registry),
     )
 
 

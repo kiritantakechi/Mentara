@@ -81,12 +81,14 @@ class Conduct:
     `Loadable`, `Full`, `Whiner`, `LooseRecruit` and `Prebuild` have no
     effect on teams the AI's triggers raise (gamemd: AI teams are
     created empty and filled by production and recruiting), so they are
-    not choices here. Nor is `Priority`: a team takes recruitable
-    members out of any team of lower priority, running or still
-    forming (gamemd 0x6F1ED9). With priorities by kind, lines stripped
-    raids as fast as they were built and no raid ever set out, so every
-    team has one priority and keeps its members until it ends; then
-    they return to the pool (Phobos `SetRecruitableOnLiberate`).
+    not choices here. Nor is `Priority` as a ranking: a team takes
+    recruitable members out of any team of lower priority (gamemd
+    0x6EA7C7), marching and fighting ones included, since only a few
+    missions such as Hunt bar recruiting. With priorities by kind,
+    lines stripped raids as fast as they were built and no raid ever
+    set out, so teams have one priority and keep their members until
+    they end; then they return to the pool (Phobos
+    `SetRecruitableOnLiberate`). The one exception is `urgent`.
 
     Attributes:
         aggressive: Members look for targets while moving and fight on
@@ -105,6 +107,14 @@ class Conduct:
         base_defense: A base-defence team (capped apart).
         transports_return: Transports released by vanilla 8 drive back
             to where vanilla 14 loaded them.
+        urgent: The team outranks the others and fills at once with
+            members taken out of them. An empty team takes the unit
+            nearest the map's first cell, wherever the house stands,
+            and then the ones nearest that (gamemd 0x6EAA90): in a
+            probe game it emptied a team at the enemy's gate and left
+            the same units at home. So it is for aircraft of one type
+            alone, which are retasked from wherever they fly and whose
+            pads hold no second squadron.
         mind_control: What to do with units members mind-control.
     """
 
@@ -118,6 +128,7 @@ class Conduct:
     guard_slower: bool = False
     base_defense: bool = False
     transports_return: bool = False
+    urgent: bool = False
     mind_control: MindControl = MindControl.DONT_CARE
 
 

@@ -1,7 +1,8 @@
 """Teams that walk into buildings.
 
 Engineers at the map's tech and bridges, infantry and tanks into
-garrisons, bunkers and reactors, hijackers, spies, and engineer drops.
+garrisons, bunkers and reactors, hijackers, spies, engineer drops, and
+the heroes set down beside an enemy superweapon.
 """
 
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from mentara.mentalai.scripts import Script, Target
 from mentara.mentalai.slots import (
     ENGINEER,
     FRONT,
+    HERO,
     HIJACKER,
     INFANTRY,
     OCCUPIER,
@@ -60,8 +62,8 @@ def engineering(ctx: Context, country: Country) -> Iterator[Order]:
 
     A trigger per tech building waits until a neutral house owns one:
     the more kinds of tech lie untaken, the sooner the engineers go, and
-    with none left they stay home. An engineer waits by a bridge hut
-    for its bridge to fall.
+    with none left they stay home. An engineer looks for a bridge that
+    is down, a few times over, and is free again.
     """
     catalog = ctx.catalog
     errands = (
@@ -207,11 +209,26 @@ _AIR_TRANSPORT: Final[Slot] = Slot(
 )
 
 
+# A hero that wrecks buildings: the better at it the better.
+_WRECKER: Final[Slot] = Slot(
+    "wrecker",
+    lambda u: HERO.fits(u) and u.firepower.building > 0,
+    lambda u, _t: u.firepower.building,
+    rank=HERO.rank,
+)
+# A hero drop's script is numbered by its building's index, from here.
+_HERO_DROP_CODE: Final[int] = 72000
+# A hero's air drop is numbered this far past the same drop by land.
+_HERO_AIR_STEP: Final[int] = 50
+
+
 def infiltration(ctx: Context, country: Country) -> Iterator[Order]:
-    """Spies on every class of building, and engineer drops."""
+    """Spies on every class of building, and drops by land and air."""
     yield from _spies(ctx, country)
     yield from _drops(ctx, country, "Engineer Drop", airborne=False)
     yield from _drops(ctx, country, "Air Drop", airborne=True)
+    yield from _hero_drops(ctx, country, "Hero Drop", airborne=False)
+    yield from _hero_drops(ctx, country, "Hero Air Drop", airborne=True)
 
 
 def _spies(ctx: Context, country: Country) -> Iterator[Order]:
@@ -234,7 +251,7 @@ def _drops(
 
     They wait for the tier of their transport, the second at least.
     """
-    crew = _drop_crew(ctx, country, airborne=airborne)
+    crew = _drop_crew(ctx, country, ((ENGINEER, _DROP_ENGINEERS),), airborne=airborne)
     gate = None if crew is None else unlocked(country, crew, floor=2)
     if crew is None or gate is None:
         return
@@ -252,25 +269,59 @@ def _drops(
         yield from on_call(squad, gate, 10)
 
 
-def _drop_crew(ctx: Context, country: Country, *, airborne: bool) -> Crew | None:
-    """A transport and the engineers that fit in it, by land or air.
+def _hero_drops(
+    ctx: Context, country: Country, way: str, *, airborne: bool
+) -> Iterator[Order]:
+    """A hero set down beside each superweapon the enemy owns.
+
+    MO's own Mental AI flies Tanya at a nuclear silo; here every side
+    sends its best wrecker, by land and by air. The enemy's building is
+    all a trigger waits for.
+    """
+    crew = _drop_crew(ctx, country, ((_WRECKER, 1),), airborne=airborne)
+    if crew is None:
+        return
+    first = _HERO_AIR_STEP * airborne
+    for place, building in enumerate(ctx.superweapon_buildings, start=1):
+        index = ctx.catalog.building_index(building)
+        script = Script(
+            _HERO_DROP_CODE + index, f"Hero Drop vs {building}", sc.strike_drop(index)
+        )
+        squad = Squad(
+            Series.HERO_DROP.at(first + place),
+            f"{way} vs {building}",
+            crew,
+            script,
+            DROP,
+            max_teams=1,
+        )
+        yield from on_call(squad, Gate.enemy_owns(building), 50)
+
+
+def _drop_crew(
+    ctx: Context, country: Country, riders: Seats, *, airborne: bool
+) -> Crew | None:
+    """A transport and the riders that fit in it, by land or air.
 
     Vanilla 14 seats them in one transport, an aircraft first.
     """
     units = ctx.fielded(country, TOP)
-    engineers = fill(((ENGINEER, _DROP_ENGINEERS),), units, TOP)
-    if engineers is None:
+    aboard = fill(riders, units, TOP)
+    if aboard is None:
         return None
-    engineer = engineers[0].unit
+    seats = sum(member.count for member in aboard)
+    size = max(member.unit.size for member in aboard)
     carriers = tuple(
         u
         for u in units
-        if u.size_limit >= engineer.size
-        and u.passengers >= _DROP_ENGINEERS
+        if u.size_limit >= size
+        and u.passengers >= seats
         and u.has(Role.AIRBORNE) == airborne
         and u.has(Role.TRANSPORT)
         and not u.roles & {Role.NAVAL, Role.HARVESTER, Role.MCV}
     )
     seat = _AIR_TRANSPORT if airborne else TRANSPORT
     transport = fill(((seat, 1),), carriers, TOP)
-    return None if transport is None else transport + engineers
+    if transport is None:
+        return None
+    return tuple(sorted(transport + aboard, key=lambda member: -member.rank))

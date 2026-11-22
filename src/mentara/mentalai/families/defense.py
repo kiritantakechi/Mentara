@@ -33,7 +33,7 @@ lazy from mentara.mentalai.catalog import Country
 
 # Anti-air holding the base: against an enemy airfield, against enemy
 # aircraft, and by interceptors.
-SKY_WATCH: Final[Script] = Script(5200, "Sky Guard", sc.watch(()))
+SKY_WATCH: Final[Script] = Script(5200, "Sky Guard", sc.stand_guard())
 
 
 def defense(ctx: Context, country: Country) -> Iterator[Order]:

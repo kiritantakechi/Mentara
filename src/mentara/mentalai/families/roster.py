@@ -31,6 +31,7 @@ from mentara.mentalai.families._kit import (
     from_tier,
     on_call,
     roster,
+    squadron,
 )
 from mentara.mentalai.families.assault import DIRECT, HUNTING
 from mentara.mentalai.families.defense import SKY_WATCH
@@ -103,7 +104,7 @@ def squadrons(ctx: Context, country: Country) -> Iterator[Order]:
         squad = Squad(
             Series.SQUADRON.at(index),
             f"Squadron {unit.id}",
-            alone(unit, 2 if docked else 4),
+            squadron(unit),
             SKY_WATCH if unit.has(Role.AA_ONLY) else air_script(unit),
             SORTIE,
             max_teams=1 if docked else 2,
@@ -209,7 +210,10 @@ def bombers(ctx: Context, country: Country) -> Iterator[Order]:
         yield from on_call(squad, gate, 20)
 
 
-_CARRIERS: Final[int] = 2
+# A mounted line's carriers are its front, as many as a line's tanks:
+# with two, 4 of 29 that set out in three games lived through the
+# break-in, the fewest of any line.
+_CARRIERS: Final[int] = 4
 # A carrier takes this many riders at most, however many it seats.
 _RIDERS_MAX: Final[int] = 2
 

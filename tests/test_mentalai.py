@@ -29,8 +29,9 @@ lazy from mentara.mentalai.scripts import Lines
 
 # One side with one country. Its yard unlocks a barracks and a war
 # factory (tier 1), a radar (tech level 5, tier 2) and labs (tech level
-# 8, tier 3). LOCK is the AI-only lock: no house builds it. DERRICK and
-# HUT belong to the map.
+# 8, tier 3), which unlock a silo and its strategic superweapon. LOCK
+# is the AI-only lock: no house builds it. DERRICK and HUT belong to
+# the map.
 RULES = """
 [General]
 BaseUnit=MCV
@@ -62,6 +63,14 @@ ANYWEAP=WEAP
 8=DERRICK
 9=HUT
 10=DOCK
+11=SILO
+
+; At the top tech level: its superweapon is a strategic one.
+[SILO]
+TechLevel=10
+Owner=Alpha
+Prerequisite=LABS
+SuperWeapon=StormSW
 
 [DOCK]
 TechLevel=2
@@ -136,6 +145,7 @@ NumberOfDocks=4
 3=PSI
 4=ENG
 5=SAPPER
+6=SPY
 
 [VehicleTypes]
 0=TANK
@@ -158,6 +168,11 @@ NumberOfDocks=4
 1=SphereSW
 2=LiftSW
 3=MinerSW
+4=StormSW
+
+; Fires on its own, at the enemy.
+[StormSW]
+Type=LightningStorm
 
 ; Team-cast (Ares: fired only by script action 55 on its SW.Group).
 [CurtainSW]
@@ -306,6 +321,16 @@ Owner=Alpha
 Prerequisite=PILE
 Engineer=yes
 Cost=500
+Strength=75
+
+; Enters enemy buildings.
+[SPY]
+TechLevel=5
+Owner=Alpha
+Prerequisite=PILE,RADR
+Infiltrate=yes
+Agent=yes
+Cost=1000
 Strength=75
 
 [PSI]
@@ -519,6 +544,7 @@ TIERS = {
     "RADR": 2,
     "AIRF": 2,
     "LABS": 3,
+    "SILO": 3,
 }
 PREFIX = "Alpha - Mental "
 ENHANCE = Path(__file__).resolve().parents[1] / "overlays" / "enhance"
@@ -736,6 +762,18 @@ def test_variants_field_second_choices(fielded: Fielded) -> None:
     assert best != second
 
 
+def test_a_grand_line_is_two_lines_as_one_team(fielded: Fielded) -> None:
+    # Teams leave as they fill, and a base's defences take them one at
+    # a time; a grand line doubles every seat of its tier's line and
+    # goes in as one team, one at a time.
+    line = fielded.crew(fielded.named["Line T2"])
+    grand = fielded.named["Grand Line T2"]
+    assert fielded.crew(grand) == tuple((2 * count, unit) for count, unit in line)
+    assert grand.max_teams == 1
+    assert grand.script == fielded.named["Line T2"].script
+    assert "Grand Line T1" not in fielded.named
+
+
 def test_task_forces_stay_within_engine_limits(plan: AIPlan) -> None:
     assert all(len(force.members) <= 6 for force in plan.task_forces)
     ids = [force.id for force in plan.task_forces] + [team.id for team in plan.teams]
@@ -818,8 +856,9 @@ def test_a_wrecker_hero_goes_for_the_yards(fielded: Fielded) -> None:
 
 
 def test_carriers_ride_with_infantry_and_deployers_deploy(fielded: Fielded) -> None:
+    # As many carriers as a line has front tanks, two riders in each.
     mounted = fielded.named["Mounted CARRIER"]
-    assert fielded.units(mounted) == {"CARRIER", "GI"}
+    assert fielded.crew(mounted) == ((4, "CARRIER"), (8, "GI"))
     assert (10103, 0) in fielded.lines(mounted)
     assert (9, 0) in fielded.lines(fielded.named["Forward OUTPOST"])
 
@@ -864,11 +903,27 @@ def test_a_mind_controller_keeps_what_it_takes(fielded: Fielded) -> None:
     assert raid.conduct.mind_control is MindControl.DONT_CARE
 
 
-def test_no_team_may_take_another_teams_members(plan: AIPlan) -> None:
-    # A team of higher priority recruits out of running teams of lower
-    # priority: in play, lines stripped every raid before it set out.
-    data = IniData.parse(render_ai_fragment(plan))
-    assert {data.get(team.id, "Priority") for team in plan.teams} == {"5"}
+def test_only_aircraft_of_one_type_take_another_teams_members(
+    fielded: Fielded, catalog: Catalog
+) -> None:
+    # A team of higher priority recruits out of teams of lower
+    # priority, marching and fighting ones included: in play, lines
+    # stripped every raid before it set out, and a probe team emptied a
+    # team at the enemy's gate while the same units stood at home. So
+    # teams have one priority, but for a squadron of one aircraft type
+    # that answers a superweapon: it retasks the craft that fly now.
+    data = IniData.parse(render_ai_fragment(fielded.plan))
+    urgent = [t for t in fielded.plan.teams if data.get(t.id, "Priority") != "5"]
+    assert [team.name.removeprefix(PREFIX) for team in urgent] == ["Air Snipe SILO"]
+    (snipe,) = urgent
+    assert data.get(snipe.id, "Priority") == "6"
+    assert fielded.crew(snipe) == ((2, "JET"),)
+    assert catalog.units["jet"].has(Role.AIRBORNE)
+    assert [call.gate for call in fielded.calls(snipe)] == [Gate.enemy_owns("SILO")]
+    # Vanilla 46 on the silo, the nearest of the enemy's, as MO's own.
+    lines = fielded.lines(snipe)
+    assert lines.index((46, (2 << 16) | 11)) < lines.index((49, 0))
+    assert not attacks_by_phobos(lines)
 
 
 # --- Scripts ----------------------------------------------------------
@@ -968,6 +1023,59 @@ def test_engineers_wait_for_untaken_tech_and_broken_bridges(fielded: Fielded) ->
     assert guard.gate == Gate.house_owns("DERRICK")
 
 
+def test_an_agent_tries_under_a_clock_and_gives_up(fielded: Fielded) -> None:
+    # An engineer or a spy that cannot reach its building must not hold
+    # its team, and its place under the team cap, for good: each try
+    # runs under a Phobos timer, and after a few the team ends.
+    for name, strike in (
+        ("Capture", (10001, 11)),
+        ("Bridge Repair", (10001, 37)),
+        ("Spy vs Power", (10001, 9)),
+    ):
+        lines = fielded.lines(fielded.named[name])
+        tries = [index for index, line in enumerate(lines) if line == strike]
+        assert len(tries) == 3
+        assert all(lines[index + 1] == (16002, 0) for index in tries)
+        assert not any(action == 6 for action, _ in lines)
+    # A spy rolls whether to go at all, inside the clock: the timer
+    # line must not be the one the roll skips.
+    spy = fielded.lines(fielded.named["Spy vs Power"])
+    assert spy[:3] == ((16001, 120), (16003, 30), (10001, 9))
+
+
+def test_a_guard_the_enemy_calls_out_stands_down(fielded: Fielded) -> None:
+    # The sky guard answers an enemy airfield. It holds the base for a
+    # spell and ends, so its members and its place under the team cap
+    # come back and its trigger decides again; the base watch is the
+    # standing guard, and loops.
+    sky = fielded.lines(fielded.named["Sky Guard"])
+    assert sky == ((54, 0), (10100, 600))
+    watch = fielded.lines(fielded.named["Base Watch T1"])
+    assert watch[-1] == (6, 2)
+
+
+def test_a_hero_is_set_down_by_an_enemy_superweapon(fielded: Fielded) -> None:
+    # MO's own Mental AI flies Tanya at a nuclear silo. The hero rides
+    # the side's transport, leads once on the ground, and the first
+    # superweapon it wrecks is the success.
+    drop = fielded.named["Hero Drop vs SILO"]
+    assert fielded.units(drop) == {"CARRIER", "HERO"}
+    assert drop.conduct.transports_return
+    assert [call.gate for call in fielded.calls(drop)] == [Gate.enemy_owns("SILO")]
+    # Vanilla lines name the silo by its index among the building
+    # types (11 in the fixture), the nearest of the enemy's (2 << 16).
+    # Phobos would keep the carrier as leader after it has gone home,
+    # and it outranks the hero: no Phobos line may pick the targets.
+    silo = (2 << 16) | 11
+    lines = fielded.lines(drop)
+    load, ride, unload, wreck, success = (
+        lines.index(line) for line in ((14, 0), (47, silo), (8, 2), (46, silo), (49, 0))
+    )
+    assert load < ride < unload < wreck < success
+    assert fielded.plan.leadership["CARRIER"] > fielded.plan.leadership["HERO"]
+    assert not attacks_by_phobos(lines)
+
+
 def test_two_team_calls_pair_their_teams(fielded: Fielded) -> None:
     # Weights are settled per Team1 type: the call leads with a copy of
     # its squad's team, so it learns apart from the line's own trigger.
@@ -979,6 +1087,15 @@ def test_two_team_calls_pair_their_teams(fielded: Fielded) -> None:
     blackout = fielded.triggers["MNTTR3802AL-G"]
     assert blackout.gate == Gate(Condition.ENEMY_POWER_SHORT)
     assert blackout.support == "MNTTT0702AL-G"
+
+
+def test_the_team_cap_keeps_the_wait_for_production_short(option: IniData) -> None:
+    # A house always stands at the cap, and a new team waits while
+    # every older one fills: the cap is that wait, in teams. A squad of
+    # vehicles alone is empty all that while, and must not be dissolved
+    # before its turn.
+    assert option.get("General", "TotalAITeamCap") == "40,30,20"
+    assert option.integer("General", "DissolveUnfilledTeamDelay") == 30000
 
 
 def test_a_trigger_learns_only_what_its_script_reports(option: IniData) -> None:
