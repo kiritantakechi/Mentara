@@ -459,7 +459,7 @@ profile may stop at any layer but never skips one (a contract test checks
       not check unit prerequisites when it fills a team. A unit's tier
       is the tech level of the building that unlocks it (up to 4, 5-7,
       8 and up).
-    - Volume: about 170 triggers per country, 2,000 in all on 1,400
+    - Volume: about 300 triggers per country, 3,632 in all on 2,180
       teams (MO's own AI has 1,200 triggers). Each team is a set of role
       slots, each filled by the best-scoring unit the country fields at
       the team's tier (at most six member types). The AI skips unit
@@ -489,7 +489,11 @@ profile may stop at any layer but never skips one (a contract test checks
       own armour (custom armours included), shared by every enemy unit
       of the armour, which hunts them through a Phobos `[AITargetTypes]`
       list (`rulesmo.patch.ini/mentalai.ini`, where indices stay fixed)
-      and raises its trigger's weight on each kill (Phobos 14000). Air
+      and raises its trigger's weight on its first kill (Phobos 14000).
+      The squad is five of the hunters and nothing else: the
+      highest-rated member picks a Phobos line's targets, and an escort
+      that outranked the hunters picked with the wrong weapon (an
+      anti-air leader found no ground target at all). Air
       is answered by anti-air holding the base, and so is an enemy
       airfield (**sky guard**). When the enemy owns a strategic
       superweapon (a top-tech-level building, as MO's own snipe teams
@@ -500,12 +504,32 @@ profile may stop at any layer but never skips one (a contract test checks
       drive next to power, a factory or the yard, unload and capture
       it; **hijackers** (Ares 67); **garrisons** of civilian buildings;
       the side's **battle bunkers**, **tank bunkers** and **bio
-      reactors**; **tech capture** and a **tech guard** for what was
-      taken; **patrols** between refineries and power plants; and the
-      **base watch**.
-    - Navy, once a shipyard stands: lines, **sub hunters** and
-      **bombardment** groups; the engine keeps them off maps without
-      water.
+      reactors**; a **tech guard** for what the engineers took;
+      **patrols** between refineries and power plants; and the **base
+      watch**. The tech guard has a trigger per tech building that
+      waits until the house owns one, and is built from tier-1 units.
+    - Engineers: each tech building (`Capturable` and `NeedsEngineer`,
+      built by no country: derricks, hospitals, airports, tech
+      artillery, 28 kinds in MO) has a trigger that waits until a
+      neutral house owns one (condition 7). The more kinds of tech lie
+      untaken, the sooner the engineers go, two teams at once; with
+      none left they are no longer raised (a single always-on trigger
+      kept two engineers standing idle on maps without tech). MO's own
+      AI did this for oil derricks and tech artillery only. A lone
+      engineer waits by a bridge repair hut and mends its bridge when
+      it falls (Phobos target 37, a hut whose bridge is destroyed).
+    - Navy, once a shipyard stands (the engine keeps it off maps
+      without water): **fleets** led by ships that can hurt the shore,
+      **bombardment** groups of ships that shell buildings (a
+      long-range torpedo boat is no artillery here), and **ship
+      hunters** for the rest, submarines above all. Naval scripts use
+      vanilla quarries, as MO's own fleets do: the engine gives each
+      ship a target it can hit, where a Phobos line asks the leader,
+      and a submarine leading found nothing on shore for the ships
+      behind it. Hunters are raised only while the chosen enemy owns a
+      shipyard: with nothing to hunt they ended their first objective
+      at once, marked success and gained weight for it, and Russia
+      raised 35 sub hunts against a USA with almost no navy (7 after).
     - Superweapon assaults: three **Chronosphere assaults** (next to the
       enemy's factories, power or defences), an **Iron Curtain charge**
       for a side with a team-cast curtain (vehicles under the curtain
@@ -529,8 +553,12 @@ profile may stop at any layer but never skips one (a contract test checks
       because heroes only filled an infantry slot. Units that unfold
       into a turret, a minefield, an outpost or a forward war factory
       deploy outside the enemy base (Fury Drone, Sweeper, Hazequad, War
-      Rig, Mobile War Factory). Bomb planters mine power plants and
-      buildings (Ivan, Arsonist, Repulsor, Virus, Ghost). Each armed
+      Rig, Mobile War Factory). Bomb planters go for what their bombs
+      stick to, read from the planting warhead's `Verses` (Ivan, Ghost
+      and the Arsonist buildings, the Repulsor vehicles and harvesters,
+      Virus infantry), on vanilla quarries as MO's own teams did:
+      Phobos judges the leader's weapon and found an Arsonist or a
+      Repulsor no target. Each armed
       carrier rides out with the infantry that fit it (IFVs, the Battle
       Fortress, Jackal, Borillo, Halftrack, Sting), Phobos 10103 seating
       them. Engineers are also air-dropped by aircraft transport (the
@@ -542,6 +570,17 @@ profile may stop at any layer but never skips one (a contract test checks
       twin everywhere; anti-air is judged against the armours aircraft
       actually wear (MO's `f_*` armours, which anti-air warheads name in
       `Versus`), not vehicle armour, and Ares `ExtraWarheads` count.
+    - Charges: a unit that is spent on its target (its primary weapon
+      is `Suicide`) or must deploy to fire the only weapon it has
+      (`DeployFireWeapon=0`) fills no slot: its one shot is not a
+      tank's firepower, and as a team leader it found no target,
+      because Phobos reads the undeployed weapon slot (every blitz a
+      Demolition Truck led logged "can't find a new target" in play).
+      Demolition Trucks, Bomb Buggies, Bloaticks and Demo Boats run
+      straight at the class they hurt most on vanilla quarries, as MO's
+      own "Demo Truck vs Factories" did, in a swarm their cost allows
+      (two trucks, eight Bloaticks). With the Iron Curtain charged, the
+      vehicles among them go in under it (MO's "Iron Truck").
     - Conduct: every TeamType key the engine reads for AI teams follows
       the squad's job, from a doctrine per kind of squad, then from its
       members. Direct lines, sieges and boost assaults drive straight in
@@ -549,20 +588,28 @@ profile may stop at any layer but never skips one (a contract test checks
       round the defences (`AvoidThreats`) and target only the chosen
       enemy (`OnlyTargetHouseEnemy`); hunting lines close ranks when
       harassed on the move (`Annoyance`); raids slip past fights to
-      their target (not `Aggressive`, `AvoidThreats`); spies, engineers
-      and hijackers ignore damage and keep going (`Suicide`) and stay out
-      of other teams; engineer drops send their transport home after
+      their target (not `Aggressive`, `AvoidThreats`); spies, engineers,
+      hijackers, occupiers and charges ignore damage and keep going
+      (`Suicide`); engineer drops send their transport home after
       unloading (`TransportsReturnOnUnload`, with vanilla load 14, which
       saves its place); guards and the base watch close ranks and refill
-      when worn to a third (`Reinforce`). `Priority` orders who may take
-      members from whom: the MCV 10, superweapon assaults 8, counters 7,
-      agents 6, lines 5, raids 4, guards and feints 3, garrisons 2. A
-      squad with slow and fast members gathers on the slow ones
-      (`GuardSlower`), and one with mind controllers keeps the units it
-      takes (`MindControlDecision`: join the team, or hunt for guards).
-      `Loadable`, `Full`, `Whiner`, `LooseRecruit` and `Prebuild` stay
-      off: AI teams are created empty and filled by production, so the
-      engine never reads them.
+      when worn to a third (`Reinforce`). A squad with slow and fast
+      members gathers on the slow ones (`GuardSlower`), and one with
+      mind controllers keeps the units it takes (`MindControlDecision`:
+      join the team, or hunt for guards). `Loadable`, `Full`, `Whiner`,
+      `LooseRecruit` and `Prebuild` stay off: AI teams are created empty
+      and filled by production, so the engine never reads them.
+    - One priority: a team takes recruitable members out of any team of
+      lower `Priority`, whether that team is still forming or already
+      on its way (gamemd 0x6F1ED9). The squads once ranked by kind (the
+      MCV 10, superweapon assaults 8, counters 7, agents 6, lines 5,
+      raids 4, guards and feints 3, garrisons 2), and a game with a
+      probe at each script's first line showed what that did: lines
+      stripped the raids of their vehicles as fast as the factories
+      built them, so of 137 blitzes, power raids and economy raids
+      created in nine minutes, 14 ever set out. Every team now has
+      priority 5 and keeps its members until it ends; then they return
+      to the pool for the next team.
     - Unpredictability: Phobos 16003 skips the next line with a chance,
       and when that line is a vanilla jump over a block, the block runs
       with that chance; each team rolls for itself (the game's synced
@@ -578,21 +625,80 @@ profile may stop at any layer but never skips one (a contract test checks
       a **pincer** sends a direct line and a flank together, **feint and
       strike** a line and a feint that pulls the defence off it, and an
       **escorted siege** a siege behind a hunting line, beside the line
-      and siege with air support.
-    - Opportunities: when the chosen enemy drains more power than it
-      makes (condition 3) its defences are off line, and a **blackout
-      assault** (a line with a blitz or a feint) goes in at high weight;
-      when it is down to 500 credits (condition 4) a **finishing hunt**
+      and siege with air support. Each such call leads with a TeamType
+      of its own, its squad's task force and script under the call's
+      name: the engine settles weights for every trigger whose Team1 is
+      the ended team's type, so a pincer that shared the line's
+      TeamType rose and fell with every plain line. The log names them
+      apart, too.
+    - Opportunities: when the chosen enemy has under 100 power to spare
+      (condition 2), a **grid strike** (a power raid) tips it into a
+      blackout; when it drains more than it makes (condition 3) its
+      defences are off line, and a **blackout assault** (a line with a
+      blitz or a feint) goes in at high weight; under 2,000 credits
+      (condition 4) every harvester it loses hurts at once, and a
+      **starve** raid goes for them; down to 500, a **finishing hunt**
       goes after what it has left, with an economy raid.
+    - Learning: the engine settles a trigger's weight when a team it
+      leads ends: up if the team ran `49,0`, down if not, and by more
+      the longer its record runs one way (gamemd 0x6E8DE0, 0x41FD60,
+      0x41FE20; MO's deltas are 5). The scripts marked success after
+      razing every building, which no team lives to, so every attack
+      trigger sank to its floor while garrisons and bunkers, which
+      marked it on entering, rose to their ceiling: nothing was learnt.
+      `49,0` now stands where a team's first objective ends, under a
+      Phobos 16001 clock or because nothing of the class is left: a
+      line alive 100 seconds into the defences, a raid that has made
+      one kill of its class (Phobos's single-kill attack lines) or is
+      alive 150 seconds after it set out, a squadron still flying after
+      a strike of up to 90 seconds on each of its two classes, a
+      transport that unloaded its engineers, a charge that reached its
+      staging line. A team wiped out before that costs its trigger
+      weight. Against heavy anti-air the air triggers fall
+      to half weight; a flank that keeps getting through doubles. The
+      clocks also move a line on from the defences to the buildings
+      instead of chasing the last turret. A script that cannot tell how
+      it fared marks nothing, and its trigger's weight is fixed
+      (minimum and maximum equal the weight): a spy or an engineer is
+      spent when it succeeds, and a garrison is in its building either
+      way.
+    - Tech: the AI does not check unit prerequisites, so the building a
+      trigger waits for is all that holds a unit back. Every trigger
+      that waits for an own building fields nothing above that
+      building's tier (a test holds this): engineer drops wait for the
+      tier of their transport, and a boost assault takes nothing above
+      the building that grants its buff. A trigger has one condition,
+      so one that waits on the enemy (counters, snipes, sky guards,
+      opportunities) cannot also wait for a building, and, as in MO's
+      own AI (its spy and snipe triggers), may field a unit before its
+      tech stands.
     - Mind controllers: tier-2 and tier-3 lines take the side's mind
       controllers (Yuri clones, Yuri Prime, the Mastermind), and keep
       what they take.
-    - Turnover: attack and counter squads recruit idle units of their
-      types anywhere (`Recruiter`), so survivors refill them before the
-      factories do; members of an ended base-defence team rejoin the
-      pool (Phobos `SetRecruitableOnLiberate`); the cap on teams at once
-      rises from MO's 100/75/50 to 150/115/80 for the larger pool;
-      agents with nothing to enter wait instead of being raised again.
+    - Turnover: the AI builds for its oldest unfilled team first and
+      hands each new unit to the oldest team that wants it (the main
+      loop walks the teams in creation order, gamemd 0x55B502; Phobos
+      `UpdateVehicleProduction`). A team therefore waits while every
+      older one fills, and the wait from a trigger firing to its team
+      setting out grows with the number of teams forming. A probe at
+      each script's first line measured it. With MO Mental's roll every
+      100 frames and a cap of 150 teams (an earlier round here raised
+      MO's 100), 879 teams were created in nine minutes and 518 set
+      out; rolling half as often set out as many (502 of 743), so the
+      factories, not the rolls, bound the army, and the extra teams
+      only lengthened the queue. The cap is now 80/60/40 (MO's 100/75/50
+      holds teams half the size). An empty team is dissolved after
+      `DissolveUnfilledTeamDelay` and loses its turn: a squad of one
+      contended type (four main tanks for an economy raid) stayed empty
+      past MO's 5,000 frames nearly every time and was raised again at
+      the back of the queue (one of 22 set out). The delay is 15,000
+      here (six of 21 set out; blitzes, power and economy raids
+      together 46 of 113, against 14 of 137 at the start). Members of
+      an ended team rejoin the pool (Phobos `SetRecruitableOnLiberate`),
+      where a squad recruits them before the factories build new ones.
+      An agent team with nothing to enter tries three times, half a
+      minute apart, and then ends: its spy or engineers serve the next
+      team instead of holding a place under the cap.
     - How they fight: lines and sieges regroup, stage outside the enemy
       base (vanilla 53, under a Phobos 16001 timeout), fight there in
       Phobos Area Guard (10100), where every member picks its own
@@ -621,8 +727,8 @@ profile may stop at any layer but never skips one (a contract test checks
       teams do; engineers and spies with nothing to enter ended and were
       raised again on every roll; airfield-bound strikes asked for more
       craft than the pads hold, so the AI abandoned their production.
-      Not yet checked: whether `Aggressive` fights on the move, anti-air
-      under Area Guard, the navy (the test map has no water).
+      Not yet checked: whether `Aggressive` fights on the move, and
+      anti-air under Area Guard.
     - Superweapons: the AI fires most superweapons on its own (Ares
       `SW.AITargeting`), but one with `SW.AITargeting=IronCurtain` waits
       for a team to request its `SW.Group` (Ares action 55) and fires on
@@ -667,7 +773,7 @@ profile may stop at any layer but never skips one (a contract test checks
       casts fired (Overcharge 11, Drakuv 10, Rage 6, Iron Curtain 5).
       Airfield-bound strike craft are lost and raised again often
       (about 40 teams of two per tier in nine minutes) but no longer
-      abandoned. Still not played: the navy (no water on the map).
+      abandoned.
     - With the per-role conduct, random branches and two-team calls (same
       four AIs): the scripts ran with no unknown action, every family
       formed, and the casts fired (Overcharge 12, Drakuv 9, Irradiate 8,
@@ -685,6 +791,25 @@ profile may stop at any layer but never skips one (a contract test checks
       Tanya, Volkov, Chitzkoi, Libra, Siberian Fin and Sicali. No
       unknown script action, and production abandoned only a handful of
       times.
+    - With learning, one priority and the shorter queue (Russia, USA,
+      PsiCorps and Last Bastion on Tea Moon Cake, nine minutes at full
+      speed, about an hour of game time; probes in a scratch layer log
+      each script's first line, first attack and success mark): 779
+      teams created, 529 set out, 228 reached their mark. Of those
+      that set out, the mark was reached by 29 of 68 direct lines, 17
+      of 39 flanks, 26 of 34 hunts, 5 of 7 sieges, 90 of 95 air
+      strikes, 13 of 40 feints, 6 of 18 blitzes, 4 of 22 power raids
+      and 9 of 10 Bloatick charges; so on this map against these
+      enemies the hunts, sieges and air strikes gain weight and the
+      break-in lines and feints lose it. The two-team calls formed
+      under their own names (Line + Air 14, Feint and Strike 12,
+      Pincer 7, Siege + Air 3), engineers went out for the map's tech
+      (11 teams), and no script logged an unknown action.
+    - The navy played (Russia against USA on Dueling Islands, nine
+      minutes): 45 naval teams formed (29 flotillas, 7 sub hunts, 6
+      bombardments, 3 fleets) and all 39 that set out engaged; land
+      teams crossed the bridges, and engineers went out to mend them
+      (11 bridge repair teams).
   - Rules in the first wave:
     - **aura**: 19 field emitters (Ultra Dome, Lightning Rod, Repair
       Crane, Iron Guard, Disruptor, Chimera Core, Haze Core, Magnetic
@@ -1008,14 +1133,17 @@ trigger `MNTTR0102RU-G`): 01-03 lines (direct, flank, hunt), 04 line
 with air, 05-06 siege, 07-11 blitz, feint, economy, power and stealth
 raids, 12 pincer, 13 air strike, 14 feint and strike, 15 base watch, 16
 patrol, 17 tech guard, 18 sky guard, 19 superweapon snipe, 20-25
-capture, garrison, bunkers, bio reactor, hijack, 26 spies, 27 engineer
-drops (2711-2713 by air), 30-32 navy, 33 flotillas, 34 escorted siege,
-35 Chronosphere, 36 Iron Curtain, 37 boost assaults, 38 blackout
-assault, 39 finishing hunt, 41 squadrons, 42 heroes, 43 forward
-deployers, 44 bombers, 45 carriers, 46 strike groups, 50-59 counter
-triggers, 60-89 counter squads, 99 MCV. A line, siege or raid variant
-puts its rank in the third digit (`MNTTF0112RU-G` is the second-best
-tier-2 line). Scripts are numbered by kind
+capture (a trigger per tech building), garrison, bunkers, bio reactor,
+hijack, 26 spies, 27 engineer drops (2711-2713 by air), 28 bridge
+repair, 29 starve, 30-32 navy, 33 flotillas, 34 escorted siege, 35
+Chronosphere, 36 Iron Curtain, 37 boost assaults, 38 blackout assault,
+39 finishing hunt, 40 grid strike, 41 squadrons, 42 heroes, 43 forward
+deployers, 44 bombers, 45 carriers, 46 strike groups, 47 charges, 48
+charges under the Iron Curtain, 50-59 counter triggers, 60-89 counter
+squads, 99 MCV. A two-team call's own lead team carries the call's
+number (`MNTTT1202RU-G` leads Russia's tier-2 pincer). A line, siege or
+raid variant puts its rank in the third digit (`MNTTF0112RU-G` is the
+second-best tier-2 line). Scripts are numbered by kind
 (`MNTSC1000-G`), with the country code when they cast that country's
 superweapons (`MNTSC1000RU-G`). Their names take the
 country's label where MO's name has the side's ("Last Bastion - Condor

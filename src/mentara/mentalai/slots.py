@@ -4,6 +4,10 @@ A slot is a predicate over a unit's role tags and a score; per country
 and tier the best-scoring unit the country fields fills it. A slot's
 rank becomes its unit's `LeadershipRating`: the member with the highest
 rating leads a team and picks its targets.
+
+A unit's rating is one number for every team it joins, so the ranks
+order the slots across all teams: the front line 12, artillery 10,
+heroes 9, the screen 8, anti-air 6, support 4.
 """
 
 import math
@@ -12,7 +16,10 @@ from dataclasses import dataclass
 from typing import Final
 lazy from collections.abc import Iterable
 
-from mentara.mentalai.catalog import Kind, Role, Unit
+from mentara.mentalai.catalog import Kind, Role
+from mentara.mentalai.model import Member
+lazy from mentara.mentalai.catalog import Unit
+lazy from mentara.mentalai.model import Crew
 
 __all__ = [
     "AA",
@@ -43,7 +50,7 @@ __all__ = [
     "STRIKER",
     "SUPPORT",
     "TRANSPORT",
-    "Filled",
+    "Seats",
     "Slot",
     "counter_slot",
     "fill",
@@ -57,7 +64,6 @@ _TOP_TIER: Final[int] = 3
 
 type _Score = Callable[[Unit, int], float]
 type _Fits = Callable[[Unit], bool]
-type Filled = tuple[tuple[tuple[int, str], ...], dict[str, int]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,18 +71,22 @@ class Slot:
     """A role in a team.
 
     Attributes:
-        name: Display name; families name required slots by it.
+        name: What the role is.
         fits: Whether a unit may fill the slot.
         score: How well a unit fills it at a tier; the best is taken.
         rank: The `LeadershipRating` its unit gets.
-        fallback: A slot tried when no unit fits this one.
+        fallback: A looser test, tried when no unit passes `fits`.
     """
 
     name: str
     fits: _Fits
     score: _Score
     rank: int
-    fallback: Slot | None = None
+    fallback: _Fits | None = None
+
+
+# The slots of a team with the count each takes, the leader's first.
+type Seats = tuple[tuple[Slot, int], ...]
 
 
 def _ground(unit: Unit) -> bool:
@@ -91,6 +101,7 @@ _NON_COMBAT: Final[frozenset[Role]] = frozenset(
         Role.DEPLOYER,
         Role.ENGINEER,
         Role.INFILTRATOR,
+        Role.CHARGER,
     }
 )
 
@@ -208,13 +219,12 @@ ANY_HERO: Final[Slot] = Slot(
 )
 # A side with no main battle tank at a tier leads with its best armed
 # combat vehicle instead, an armed carrier included.
-_FRONT_FALLBACK: Final[Slot] = Slot("front", _armed_vehicle, _front_score, rank=12)
 FRONT: Final[Slot] = Slot(
     "front",
     lambda u: _fighter(u) and u.has(Role.MBT) and not u.has(Role.HERO),
     _front_score,
     rank=12,
-    fallback=_FRONT_FALLBACK,
+    fallback=_armed_vehicle,
 )
 SCREEN: Final[Slot] = Slot(
     "screen",
@@ -313,10 +323,14 @@ AIR: Final[Slot] = Slot(
     ),
     rank=8,
 )
+# Leads a fleet against the shore: a ship that cannot hurt a building
+# hunts other ships instead.
 NAVAL_FRONT: Final[Slot] = Slot(
     "naval front",
     lambda u: (
-        u.has(Role.NAVAL, Role.GUN) and not u.roles & (_NON_COMBAT | {Role.TRANSPORT})
+        u.has(Role.NAVAL, Role.GUN)
+        and u.firepower.building > 0
+        and not u.roles & (_NON_COMBAT | {Role.TRANSPORT})
     ),
     lambda u, _t: (
         u.strength
@@ -341,9 +355,14 @@ NAVAL_AA: Final[Slot] = Slot(
     _aa_score,
     rank=6,
 )
+# Shells the shore: a long-range torpedo boat is no artillery here.
 NAVAL_ARTILLERY: Final[Slot] = Slot(
     "naval artillery",
-    lambda u: u.has(Role.NAVAL, Role.ARTILLERY) and not u.roles & _NON_COMBAT,
+    lambda u: (
+        u.has(Role.NAVAL, Role.ARTILLERY)
+        and u.firepower.building > 0
+        and not u.roles & _NON_COMBAT
+    ),
     _siege_score,
     rank=10,
 )
@@ -426,61 +445,58 @@ def counter_slot(armor: str, *, airborne: bool, naval: bool) -> Slot:
     )
 
 
-def fill(  # noqa: PLR0913 - the slots, the pool and how to read them
-    slots: Iterable[tuple[Slot, int]],
+def fill(
+    seats: Seats,
     units: Iterable[Unit],
     tier: int,
     *,
-    required: Iterable[str] = (),
-    skip_detector: bool = True,
+    required: Iterable[Slot] = (),
     rank: int = 0,
-) -> Filled | None:
-    """Fill slots from the units a country fields.
+) -> Crew | None:
+    """Fill a team's slots from the units a country fields.
 
     Each slot takes its best-scoring unit; a unit already chosen for an
     earlier slot adds to that member instead of a new type. A detector
     slot is skipped when a chosen unit already detects.
 
     Args:
-        slots: Slots and their counts, in leading order.
+        seats: Slots and their counts, in leading order.
         units: The units to choose from.
         tier: The tier the team is built for.
-        required: Slot names that must be filled.
-        skip_detector: Whether a chosen detector makes the detector slot
-            redundant.
+        required: Slots that must be filled.
         rank: Take each slot's rank-th best unit (0 is the best), or its
             last when it has fewer: variants of one team.
 
     Returns:
-        The members and each member's leadership rank, or None when a
-        required slot stays empty or nothing fits.
+        The members, the highest-ranked first, or None when a required
+        slot stays empty or nothing fits.
     """
     # A player's version is converted to its AI twin for the AI; only
     # the twin is fielded.
     pool = tuple(u for u in units if not u.has(Role.PLAYER_VERSION))
     needed = frozenset(required)
-    counts: dict[str, int] = {}
-    ranks: dict[str, int] = {}
-    chosen: dict[str, Unit] = {}
-    for slot, count in slots:
-        detects = any(u.has(Role.DETECTOR) for u in chosen.values())
-        if slot is DETECTOR and skip_detector and detects:
+    chosen: dict[str, Member] = {}
+    for slot, count in seats:
+        if slot is DETECTOR and any(
+            member.unit.has(Role.DETECTOR) for member in chosen.values()
+        ):
             continue
         candidates = [u for u in pool if slot.fits(u)]
         if not candidates and slot.fallback is not None:
-            candidates = [u for u in pool if slot.fallback.fits(u)]
+            candidates = [u for u in pool if slot.fallback(u)]
         if not candidates:
-            if slot.name in needed:
+            if slot in needed:
                 return None
             continue
         ordered = sorted(candidates, key=lambda u: (slot.score(u, tier), u.id))
         best = ordered[max(len(ordered) - 1 - rank, 0)]
-        if best.id not in counts and len(counts) >= _TASK_FORCE_TYPES_MAX:
+        seated = chosen.get(best.id)
+        if seated is None and len(chosen) >= _TASK_FORCE_TYPES_MAX:
             continue
-        counts[best.id] = counts.get(best.id, 0) + count
-        ranks[best.id] = max(ranks.get(best.id, 0), slot.rank)
-        chosen[best.id] = best
-    if not counts:
-        return None
-    ordered = sorted(counts, key=lambda unit_id: -ranks[unit_id])
-    return tuple((counts[u], u) for u in ordered), ranks
+        chosen[best.id] = (
+            Member(count, best, slot.rank)
+            if seated is None
+            else Member(seated.count + count, best, max(seated.rank, slot.rank))
+        )
+    crew = sorted(chosen.values(), key=lambda member: -member.rank)
+    return tuple(crew) or None

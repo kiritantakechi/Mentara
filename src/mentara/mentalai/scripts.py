@@ -1,4 +1,4 @@
-"""The Mental AI's ScriptTypes: what each kind of team does.
+"""The Mental AI's scripts: what each kind of team does.
 
 How a team fights, from the Phobos v0.5-alpha2 and YR sources:
 
@@ -13,19 +13,35 @@ How a team fights, from the Phobos v0.5-alpha2 and YR sources:
 - Not used, broken in alpha2: 12000 (never waits), 10102 (never
   regroups), 18000, the "random" list attacks, and 10104's charge
   test.
+
+How a trigger learns (gamemd 0x6E8DE0, 0x41FD60, 0x41FE20): when a team
+ends, every trigger it leads gains weight if the team ran `49,0` and
+loses weight if not, more the longer its record runs one way. So `49,0`
+stands where a team has done its job: alive when its first objective
+ends, by the clock or because nothing of the class is left. For a team
+on Phobos attack lines the first objective is one kill (the odd-numbered
+actions end on a member's kill). A script whose outcome cannot be read
+(an agent is spent when it succeeds) marks nothing, and its trigger
+keeps a steady weight.
 """
 
 from dataclasses import dataclass, field
-from typing import Final
+from enum import IntEnum
+from typing import Final, Protocol
 
 __all__ = [
+    "Line",
     "Lines",
+    "Quarry",
     "Script",
+    "Target",
     "absorb",
     "air_strike",
     "blitz",
     "bombing",
+    "bridge_repair",
     "capture_tech",
+    "charge",
     "chrono_assault",
     "counter_hunt",
     "curtain_charge",
@@ -40,7 +56,6 @@ __all__ = [
     "line_direct",
     "line_flank",
     "line_hunt",
-    "make_script",
     "mounted",
     "naval_bombard",
     "naval_hunt",
@@ -56,68 +71,85 @@ __all__ = [
     "watch",
 ]
 
-type Lines = tuple[tuple[int, int], ...]
+type Line = tuple[int, int]
+type Lines = tuple[Line, ...]
 
-# Vanilla and Ares actions.
-_ATTACK: Final[int] = 0
-_JUMP: Final[int] = 6  # 1-based line number
-_UNLOAD: Final[int] = 8
-_DEPLOY: Final[int] = 9
-_MISSION: Final[int] = 11
-_SUCCESS: Final[int] = 49
-_GATHER_AT_ENEMY: Final[int] = 53
-_REGROUP_AT_BASE: Final[int] = 54
-_TEAM_CAST: Final[int] = 55  # Ares: fire the group's superweapon here
-_CHRONOSHIFT_TO_THREAT: Final[int] = 57
-_ENTER_TANK_BUNKER: Final[int] = 61
-_ENTER_BIO_REACTOR: Final[int] = 62
-_OCCUPY_BATTLE_BUNKER: Final[int] = 63
-_GARRISON: Final[int] = 64
-_TAKE_VEHICLES: Final[int] = 67  # Ares
-# Vanilla quarries and missions.
-ANYTHING: Final[int] = 1
-STRUCTURES: Final[int] = 2
-INFANTRY: Final[int] = 4
-VEHICLES: Final[int] = 5
-FACTORIES: Final[int] = 6
-DEFENSES: Final[int] = 7
-POWER: Final[int] = 9
-OCCUPIED: Final[int] = 10
-_HUNT: Final[int] = 15
-# Phobos actions.
-_P_ATTACK: Final[int] = 10000
-_P_ATTACK_ONCE: Final[int] = 10001
-_P_ATTACK_LIST_THREAT: Final[int] = 10012
-_P_ATTACK_FARTHER: Final[int] = 10005
-_LOAD: Final[int] = 14
-_P_MOVE_ENEMY: Final[int] = 10050
-_P_MOVE_ENEMY_FARTHER: Final[int] = 10056
-_P_MOVE_FRIENDLY: Final[int] = 10053
-_P_AREA_GUARD: Final[int] = 10100
-_P_LOAD: Final[int] = 10103
-_P_MOVE_DISTANCE: Final[int] = 12001
-_P_MOVE_END: Final[int] = 12002
-_P_REWARD: Final[int] = 14000
-_P_TIMEOUT: Final[int] = 16001
-_P_TIMEOUT_STOP: Final[int] = 16002
-_P_SKIP_CHANCE: Final[int] = 16003
-# Phobos target types.
-T_STRUCTURES: Final[int] = 2
-T_ORE_MINERS: Final[int] = 3
-T_FACTORIES: Final[int] = 6
-T_DEFENSES: Final[int] = 7
-T_POWER: Final[int] = 9
-T_TECH: Final[int] = 11
-T_REFINERY: Final[int] = 12
-T_ECONOMY: Final[int] = 18
-T_BARRACKS: Final[int] = 19
-T_VEHICLE_FACTORY: Final[int] = 20
-T_RADAR: Final[int] = 22
-T_TECH_LAB: Final[int] = 23
-T_SUPERWEAPON: Final[int] = 25
-T_CONSTRUCTION_YARD: Final[int] = 26
-T_NAVAL_UNITS: Final[int] = 31
-T_MOBILE: Final[int] = 32
+
+class Quarry(IntEnum):
+    """What a vanilla attack line (`0,q`) goes for."""
+
+    ANYTHING = 1
+    STRUCTURES = 2
+    HARVESTERS = 3
+    INFANTRY = 4
+    VEHICLES = 5
+    FACTORIES = 6
+    DEFENSES = 7
+    POWER = 9
+    OCCUPIED = 10
+
+
+class Target(IntEnum):
+    """What a Phobos attack or move line goes for (its target types)."""
+
+    STRUCTURES = 2
+    ORE_MINERS = 3
+    FACTORIES = 6
+    DEFENSES = 7
+    POWER = 9
+    TECH = 11
+    REFINERY = 12
+    ECONOMY = 18
+    BARRACKS = 19
+    VEHICLE_FACTORY = 20
+    RADAR = 22
+    TECH_LAB = 23
+    SUPERWEAPON = 25
+    CONSTRUCTION_YARD = 26
+    BROKEN_BRIDGE_HUT = 37
+
+
+class _Action(IntEnum):
+    """The actions used: vanilla and Ares below 10000, Phobos above."""
+
+    ATTACK = 0
+    JUMP = 6  # to a 1-based line number
+    UNLOAD = 8
+    DEPLOY = 9
+    MISSION = 11
+    LOAD = 14
+    SUCCESS = 49
+    GATHER_AT_ENEMY = 53
+    REGROUP_AT_BASE = 54
+    TEAM_CAST = 55  # Ares: fire the group's superweapon on the team
+    CHRONOSHIFT_TO_THREAT = 57
+    ENTER_TANK_BUNKER = 61
+    ENTER_BIO_REACTOR = 62
+    OCCUPY_BATTLE_BUNKER = 63
+    GARRISON = 64
+    TAKE_VEHICLES = 67  # Ares
+    STRIKE = 10000
+    STRIKE_FARTHER = 10005
+    STRIKE_LISTED = 10012  # the closest, most threatening of a list
+    MOVE_TO_ENEMY = 10050
+    MOVE_TO_OWN = 10053
+    MOVE_TO_FAR_ENEMY = 10056
+    AREA_GUARD = 10100
+    BOARD = 10103
+    MOVE_DISTANCE = 12001
+    MOVE_END = 12002
+    REWARD = 14000
+    TIMEOUT = 16001
+    TIMEOUT_STOP = 16002
+    SKIP_CHANCE = 16003
+
+
+# A Phobos attack action repeats until its class is gone; the next
+# number is the same attack ended by the first kill a member makes.
+_ONCE: Final[int] = 1
+_HUNT_MISSION: Final[int] = 15
+_UNLOAD_KEEP_PASSENGERS: Final[int] = 2  # lose transports, keep units
+_ALL_ARRIVE: Final[int] = 2  # Phobos 12002: every member arrives
 # Seconds.
 _STAGE_TIMEOUT: Final[int] = 90
 _STAGE_FIGHT: Final[int] = 15
@@ -130,50 +162,128 @@ _WATCH: Final[int] = 60
 _PATROL_STOP: Final[int] = 30
 _AGENT_RETRY: Final[int] = 30
 _COUNTER_PAUSE: Final[int] = 10
-_SPY_SKIP_PERCENT: Final[int] = 30
-_REWARD: Final[int] = 10
+_CLOSER_TIMEOUT: Final[int] = 60
+# How long a first objective may take before the team moves on. A team
+# alive at its end has done its job (the success mark follows it).
+_BREAK_IN: Final[int] = 100  # a line against the defences
+_STRIKE: Final[int] = 60  # an opening strike before the push
+_HUNT_PROOF: Final[int] = 120
+_RAID_PROOF: Final[int] = 150  # a raid's first target, the way included
+_SORTIE: Final[int] = 90
+# Cells.
 _FLANK_DISTANCE: Final[int] = 6
 _DROP_DISTANCE: Final[int] = 4
-_UNLOAD_KEEP_PASSENGERS: Final[int] = 2  # lose transports, keep units
 # Ares: 53,n gathers n cells nearer the enemy's base than its safe
 # distance when negative.
 _CLOSER: Final[int] = -10
-_CLOSER_TIMEOUT: Final[int] = 60
-_FLANK_ALL_ARRIVE: Final[int] = 2  # Phobos 12002: every member arrives
+_AGENT_TRIES: Final[int] = 3
+_SPY_SKIP_PERCENT: Final[int] = 30
+_REWARD: Final[int] = 10
 
 
 @dataclass(frozen=True, slots=True)
 class Script:
-    """A ScriptType.
+    """What a kind of team does: a ScriptType before it has an ID.
 
     Attributes:
-        id: Section ID.
-        name: Display name.
+        code: Its number among the Mental AI's scripts.
+        name: What it is ("Line").
         lines: Action and argument per line.
     """
 
-    id: str
+    code: int
     name: str
     lines: Lines
 
+    @property
+    def casts(self) -> bool:
+        """Whether a line fires a superweapon, a country's own."""
+        return any(action == _Action.TEAM_CAST for action, _ in self.lines)
 
-def make_script(code: int, name: str, lines: Lines, country_code: str) -> Script:
-    """A script, a country's own when it casts that country's weapons.
+    @property
+    def measured(self) -> bool:
+        """Whether it tells its trigger how the team fared.
 
-    Args:
-        code: Its ID number.
-        name: Display name.
-        lines: Its lines.
-        country_code: The country's two-letter code.
+        It does when a line marks success or pays for a kill.
+        """
+        told = {_Action.SUCCESS, _Action.REWARD}
+        return any(action in told for action, _ in self.lines)
 
-    Returns:
-        `MNTSC<code><country>-G` when a line casts a superweapon, else
-        the shared `MNTSC<code>-G`.
+
+# --- Lines -----------------------------------------------------------
+#
+# The engine's action numbers appear here only; the scripts below are
+# written in these words.
+
+_REGROUP: Final[Line] = (_Action.REGROUP_AT_BASE, 0)
+_SUCCESS: Final[Line] = (_Action.SUCCESS, 0)
+_HUNT: Final[Line] = (_Action.MISSION, _HUNT_MISSION)
+_DEPLOY: Final[Line] = (_Action.DEPLOY, 0)
+_LOAD: Final[Line] = (_Action.LOAD, 0)
+_BOARD: Final[Line] = (_Action.BOARD, 0)
+_UNLOAD: Final[Line] = (_Action.UNLOAD, _UNLOAD_KEEP_PASSENGERS)
+_ALL_MUST_ARRIVE: Final[Line] = (_Action.MOVE_END, _ALL_ARRIVE)
+_TAKE_VEHICLES: Final[Line] = (_Action.TAKE_VEHICLES, 0)
+
+
+def _attack(quarry: Quarry) -> Line:
+    """Vanilla attack, until nothing of the class is left."""
+    return (_Action.ATTACK, quarry)
+
+
+class _Strike(Protocol):
+    """A Phobos attack line on a class, to its end or to one kill."""
+
+    def __call__(self, target: int, *, once: bool = False) -> Line: ...
+
+
+def _strike(target: int, *, once: bool = False) -> Line:
+    """Phobos attack on the nearest of a class."""
+    return (_Action.STRIKE + _ONCE * once, target)
+
+
+def _strike_farther(target: int, *, once: bool = False) -> Line:
+    """Phobos attack on the farthest of a class."""
+    return (_Action.STRIKE_FARTHER + _ONCE * once, target)
+
+
+def _strike_listed(target: int, *, once: bool = False) -> Line:
+    """Phobos attack on an `[AITargetTypes]` list, by its index."""
+    return (_Action.STRIKE_LISTED + _ONCE * once, target)
+
+
+def _guard(seconds: int) -> Line:
+    """Phobos Area Guard: every member picks its own targets."""
+    return (_Action.AREA_GUARD, seconds)
+
+
+def _gather(offset: int = 0) -> Line:
+    """Vanilla gathering outside the enemy base, nearer if negative."""
+    return (_Action.GATHER_AT_ENEMY, offset)
+
+
+def _jump(line: int) -> Line:
+    """Vanilla jump to a line, counted from 1."""
+    return (_Action.JUMP, line)
+
+
+def _timed(seconds: int, *lines: Line) -> Lines:
+    """Lines that end after a time at most (Phobos 16001, 16002)."""
+    return ((_Action.TIMEOUT, seconds), *lines, (_Action.TIMEOUT_STOP, 0))
+
+
+def _proven(seconds: int, *lines: Line) -> Lines:
+    """A first objective under a clock, then the success mark."""
+    return (*_timed(seconds, *lines), _SUCCESS)
+
+
+def _first_kill(strike: _Strike, target: int) -> Lines:
+    """One kill of a class under a clock, the mark, then the rest of it.
+
+    The clock covers the way there: a raid that has made its kill, or
+    is still alive when the clock runs out, has got in.
     """
-    own = any(action == _TEAM_CAST for action, _ in lines)
-    suffix = country_code if own else ""
-    label = f" ({country_code})" if own else ""
-    return Script(f"MNTSC{code}{suffix}-G", name + label, lines)
+    return (*_proven(_RAID_PROOF, strike(target, once=True)), strike(target))
 
 
 def _casts(groups: tuple[int, ...]) -> Lines:
@@ -187,14 +297,23 @@ def _casts(groups: tuple[int, ...]) -> Lines:
     return tuple(
         line
         for group in groups
-        for line in (
-            (_P_TIMEOUT, _CAST_TIMEOUT),
-            (_TEAM_CAST, group),
-            (_P_TIMEOUT_STOP, 0),
-        )
+        for line in _timed(_CAST_TIMEOUT, (_Action.TEAM_CAST, group))
     )
 
 
+def _tries(*attempt: Line) -> Lines:
+    """An agent's attempt, made a few times with a wait between.
+
+    Then the team ends and its agents are free for the next team that
+    wants them. A team that waited for ever held a place under the
+    team cap; one that ended at once was raised again on the next roll
+    (112 times in eight minutes in a probe game).
+    """
+    again = (*attempt, _guard(_AGENT_RETRY)) * (_AGENT_TRIES - 1)
+    return (*again, *attempt)
+
+
+# A mutable builder: a branch's jump is counted from the lines so far.
 @dataclass(slots=True)
 class _Draft:
     """A script under construction, with random branches.
@@ -205,79 +324,84 @@ class _Draft:
     machine), so no two waves need take the same road.
     """
 
-    lines: list[tuple[int, int]] = field(default_factory=list)
+    lines: list[Line] = field(default_factory=list)
 
-    def then(self, *lines: tuple[int, int]) -> _Draft:
+    def then(self, *lines: Line) -> _Draft:
         self.lines.extend(lines)
         return self
 
-    def maybe(self, percent: int, *block: tuple[int, int]) -> _Draft:
+    def maybe(self, percent: int, *block: Line) -> _Draft:
         """Run a block with a chance in percent."""
         after = len(self.lines) + 2 + len(block)
-        self.lines.extend(((_P_SKIP_CHANCE, percent), (_JUMP, after + 1), *block))
-        return self
+        return self.then(
+            (_Action.SKIP_CHANCE, percent),
+            _jump(after + 1),
+            *block,
+        )
 
     def either(self, percent: int, first: Lines, second: Lines) -> _Draft:
         """Run `first` with a chance in percent, else `second`."""
         second_at = len(self.lines) + 2 + len(first) + 1
         end = second_at + len(second)
-        self.lines.extend(
-            (
-                (_P_SKIP_CHANCE, percent),
-                (_JUMP, second_at + 1),
-                *first,
-                (_JUMP, end + 1),
-                *second,
-            )
+        return self.then(
+            (_Action.SKIP_CHANCE, percent),
+            _jump(second_at + 1),
+            *first,
+            _jump(end + 1),
+            *second,
         )
-        return self
+
+    def gather(self, *, closer: int) -> _Draft:
+        """Gather outside the enemy base.
+
+        With a chance in percent the team gathers again, nearer: waves
+        do not all stop at the same line.
+        """
+        return self.then(*_timed(_STAGE_TIMEOUT, _gather())).maybe(
+            closer, *_timed(_CLOSER_TIMEOUT, _gather(_CLOSER))
+        )
 
     def done(self) -> Lines:
         return tuple(self.lines)
 
 
-def _timed(seconds: int, *lines: tuple[int, int]) -> Lines:
-    """Lines that end after a time at most (Phobos 16001, 16002)."""
-    return ((_P_TIMEOUT, seconds), *lines, (_P_TIMEOUT_STOP, 0))
-
-
 def _stage(*, closer: int) -> _Draft:
-    """Conscript, then gather outside the enemy base.
+    """Conscript, then gather outside the enemy base."""
+    return _Draft().then(_REGROUP).gather(closer=closer)
 
-    With a chance in percent the team gathers again, nearer: waves do
-    not all stop at the same line.
-    """
+
+_MOP_UP: Final[Lines] = (_attack(Quarry.ANYTHING),)
+
+
+def _push() -> Lines:
+    """Break the defences, hold a moment inside, then raze the base."""
     return (
-        _Draft()
-        .then((_REGROUP_AT_BASE, 0), *_timed(_STAGE_TIMEOUT, (_GATHER_AT_ENEMY, 0)))
-        .maybe(closer, *_timed(_CLOSER_TIMEOUT, (_GATHER_AT_ENEMY, _CLOSER)))
+        *_timed(_BREAK_IN, _attack(Quarry.DEFENSES)),
+        _guard(_PUSH_PAUSE),
+        _SUCCESS,
+        _attack(Quarry.STRUCTURES),
+        *_MOP_UP,
     )
 
 
-def _finish() -> Lines:
-    return ((_SUCCESS, 0), (_ATTACK, ANYTHING))
+# --- Assaults --------------------------------------------------------
 
 
 def line_direct(casts: tuple[int, ...]) -> Lines:
     """Stage, then break the defences and raze the base.
 
     Each wave rolls its own approach: how near it gathers, whether it
-    fights at the gathering point or rushes, and whether it strikes the
-    factories or the power first (a power cut takes the defences off
-    line) before the defences.
+    fights at the gathering point or rushes, and whether it opens on the
+    factories or the power (a power cut takes the defences off line)
+    before the defences.
     """
     return (
         _stage(closer=50)
-        .maybe(70, (_P_AREA_GUARD, _STAGE_FIGHT))
+        .maybe(70, _guard(_STAGE_FIGHT))
         .then(*_casts(casts))
-        .maybe(35, (_ATTACK, FACTORIES))
-        .maybe(35, (_ATTACK, POWER))
-        .then(
-            (_ATTACK, DEFENSES),
-            (_P_AREA_GUARD, _PUSH_PAUSE),
-            (_ATTACK, STRUCTURES),
-            *_finish(),
-        )
+        .maybe(35, *_timed(_STRIKE, _attack(Quarry.FACTORIES)))
+        .maybe(35, *_timed(_STRIKE, _attack(Quarry.POWER)))
+        .then(*_push())
         .done()
     )
 
@@ -292,28 +416,36 @@ def line_flank(casts: tuple[int, ...]) -> Lines:
     to (power plants or any building) and what it hits first.
     """
 
-    def circle(target: int) -> Lines:
+    def circle(target: Target) -> Lines:
         return (
-            (_P_MOVE_DISTANCE, _FLANK_DISTANCE),
-            (_P_MOVE_END, _FLANK_ALL_ARRIVE),
-            *_timed(_FLANK_TIMEOUT, (_P_MOVE_ENEMY_FARTHER, target)),
+            (_Action.MOVE_DISTANCE, _FLANK_DISTANCE),
+            _ALL_MUST_ARRIVE,
+            *_timed(_FLANK_TIMEOUT, (_Action.MOVE_TO_FAR_ENEMY, target)),
         )
 
     return (
         _Draft()
-        .then((_REGROUP_AT_BASE, 0))
-        .either(50, circle(T_POWER), circle(T_STRUCTURES))
-        .maybe(70, (_P_AREA_GUARD, _STAGE_FIGHT))
+        .then(_REGROUP)
+        .either(50, circle(Target.POWER), circle(Target.STRUCTURES))
+        .maybe(70, _guard(_STAGE_FIGHT))
         .then(*_casts(casts))
-        .either(50, ((_ATTACK, POWER),), ((_ATTACK, FACTORIES),))
-        .then((_ATTACK, STRUCTURES), *_finish())
+        .either(
+            50,
+            _timed(_BREAK_IN, _attack(Quarry.POWER)),
+            _timed(_BREAK_IN, _attack(Quarry.FACTORIES)),
+        )
+        .then(_SUCCESS, _attack(Quarry.STRUCTURES), *_MOP_UP)
         .done()
     )
 
 
 def line_hunt(casts: tuple[int, ...]) -> Lines:
     """Stage, then hunt the enemy army; members pick their targets."""
-    return _stage(closer=50).then(*_casts(casts), (_MISSION, _HUNT)).done()
+    return (
+        _stage(closer=50)
+        .then(*_casts(casts), *_proven(_HUNT_PROOF, _HUNT), _HUNT)
+        .done()
+    )
 
 
 def siege(casts: tuple[int, ...]) -> Lines:
@@ -323,10 +455,14 @@ def siege(casts: tuple[int, ...]) -> Lines:
     """
     return (
         _stage(closer=0)
-        .maybe(60, (_P_AREA_GUARD, _STAGE_FIGHT))
+        .maybe(60, _guard(_STAGE_FIGHT))
         .then(*_casts(casts))
-        .maybe(40, (_ATTACK, POWER))
-        .then((_ATTACK, DEFENSES), (_ATTACK, STRUCTURES), *_finish())
+        .maybe(40, *_timed(_STRIKE, _attack(Quarry.POWER)))
+        .then(
+            *_proven(_BREAK_IN, _attack(Quarry.DEFENSES)),
+            _attack(Quarry.STRUCTURES),
+            *_MOP_UP,
+        )
         .done()
     )
 
@@ -337,21 +473,13 @@ def superweapon_snipe(casts: tuple[int, ...]) -> Lines:
         _stage(closer=50)
         .then(
             *_casts(casts),
-            (_P_REWARD, _REWARD * 2),
-            (_P_ATTACK_ONCE, T_SUPERWEAPON),
-            (_P_ATTACK_ONCE, T_SUPERWEAPON),
-            (_ATTACK, STRUCTURES),
-            *_finish(),
+            (_Action.REWARD, _REWARD * 2),
+            *_first_kill(_strike, Target.SUPERWEAPON),
+            _attack(Quarry.STRUCTURES),
+            *_MOP_UP,
         )
         .done()
     )
-
-
-def _either_order(
-    percent: int, first: tuple[int, int], second: tuple[int, int]
-) -> _Draft:
-    """Two targets in either order, the first first with a chance."""
-    return _Draft().either(percent, (first, second), (second, first))
 
 
 def decapitate(casts: tuple[int, ...]) -> Lines:
@@ -363,11 +491,10 @@ def decapitate(casts: tuple[int, ...]) -> Lines:
         _stage(closer=50)
         .then(
             *_casts(casts),
-            (_P_ATTACK_ONCE, T_CONSTRUCTION_YARD),
-            (_P_ATTACK_ONCE, T_CONSTRUCTION_YARD),
-            (_ATTACK, FACTORIES),
-            (_ATTACK, STRUCTURES),
-            *_finish(),
+            *_first_kill(_strike, Target.CONSTRUCTION_YARD),
+            _attack(Quarry.FACTORIES),
+            _attack(Quarry.STRUCTURES),
+            *_MOP_UP,
         )
         .done()
     )
@@ -382,15 +509,10 @@ def mounted(casts: tuple[int, ...]) -> Lines:
     """
     return (
         _Draft()
-        .then((_REGROUP_AT_BASE, 0), (_P_LOAD, 0))
-        .then(*_stage(closer=50).lines[1:])
-        .maybe(70, (_P_AREA_GUARD, _STAGE_FIGHT))
-        .then(
-            *_casts(casts),
-            (_ATTACK, DEFENSES),
-            (_ATTACK, STRUCTURES),
-            *_finish(),
-        )
+        .then(_REGROUP, _BOARD)
+        .gather(closer=50)
+        .maybe(70, _guard(_STAGE_FIGHT))
+        .then(*_casts(casts), *_push())
         .done()
     )
 
@@ -399,189 +521,30 @@ def forward_deploy() -> Lines:
     """Stage outside the enemy base and deploy there (vanilla 9).
 
     For units that unfold into a turret, a minefield or an outpost; the
-    escort then fights from the new position.
+    escort then fights from the new position. Deployed is done.
     """
-    return _stage(closer=50).then((_DEPLOY, 0), *_finish()).done()
+    return _stage(closer=50).then(_DEPLOY, _SUCCESS, *_MOP_UP).done()
 
 
-def bombing() -> Lines:
-    """Plant bombs on power plants or any building, as rolled."""
-    return (
-        _Draft()
-        .then((_REGROUP_AT_BASE, 0))
-        .either(50, ((_P_ATTACK, T_POWER),), ((_P_ATTACK, T_STRUCTURES),))
-        .then(*_finish())
-        .done()
-    )
+def charge(first: Quarry, second: Quarry, casts: tuple[int, ...]) -> Lines:
+    """Drive straight at what the team hurts most (vanilla quarries).
 
-
-def blitz() -> Lines:
-    """Fast units straight at the factories, then the yard."""
-    return (
-        _Draft()
-        .then((_REGROUP_AT_BASE, 0))
-        .then(
-            *_either_order(
-                50, (_P_ATTACK, T_VEHICLE_FACTORY), (_P_ATTACK, T_BARRACKS)
-            ).lines
-        )
-        .then((_P_ATTACK, T_CONSTRUCTION_YARD), *_finish())
-        .done()
-    )
-
-
-def feint() -> Lines:
-    """Draw the defence off: hit the enemy's farthest buildings."""
-    return (
-        _Draft()
-        .then((_REGROUP_AT_BASE, 0))
-        .either(
-            50,
-            ((_P_ATTACK_FARTHER, T_POWER),),
-            ((_P_ATTACK_FARTHER, T_STRUCTURES),),
-        )
-        .then(*_finish())
-        .done()
-    )
-
-
-def economy_raid() -> Lines:
-    """Harvesters and refineries, in an order each raid rolls."""
-    order = _either_order(60, (_P_ATTACK, T_ORE_MINERS), (_P_ATTACK, T_ECONOMY))
-    return _Draft().then((_REGROUP_AT_BASE, 0), *order.lines, *_finish()).done()
-
-
-def power_raid() -> Lines:
-    """Black out the base: power plants and radar, in either order."""
-    order = _either_order(60, (_P_ATTACK, T_POWER), (_P_ATTACK, T_RADAR))
-    return _Draft().then((_REGROUP_AT_BASE, 0), *order.lines, *_finish()).done()
-
-
-def air_strike(first: int, second: int) -> Lines:
-    """Two vanilla quarries, in an order each strike rolls.
-
-    Vanilla quarries, as MO's own air teams use: a Phobos attack line
-    found no target for Comanches in a probe game and the team hovered
-    in place. Vanilla `0,q` repeats until the class is gone, and the
-    engine sends the craft to rearm and back.
+    For units that explode on their target or must deploy to fire:
+    Phobos picks targets with the leader's undeployed weapon and finds
+    none for them. The charge spends the team, so reaching the staging
+    line alive is its success.
     """
-    order = _either_order(65, (_ATTACK, first), (_ATTACK, second))
-    return _Draft().then(*order.lines, *_finish()).done()
-
-
-def watch(casts: tuple[int, ...]) -> Lines:
-    """Guard the base front, casting home superweapons each round."""
     return (
-        (_REGROUP_AT_BASE, 0),
+        _REGROUP,
+        *_proven(_STAGE_TIMEOUT, _gather()),
         *_casts(casts),
-        (_P_AREA_GUARD, _WATCH),
-        (_JUMP, 2),
+        _attack(first),
+        _attack(second),
+        *_MOP_UP,
     )
 
 
-def patrol() -> Lines:
-    """Walk between refineries and power plants, guarding at each."""
-    return (
-        (_P_MOVE_FRIENDLY, T_REFINERY),
-        (_P_AREA_GUARD, _PATROL_STOP),
-        (_P_MOVE_FRIENDLY, T_POWER),
-        (_P_AREA_GUARD, _PATROL_STOP),
-        (_JUMP, 1),
-    )
-
-
-def tech_guard() -> Lines:
-    """Hold the tech buildings the house has taken."""
-    return (
-        (_P_MOVE_FRIENDLY, T_TECH),
-        (_P_AREA_GUARD, _WATCH),
-        (_JUMP, 1),
-    )
-
-
-def capture_tech() -> Lines:
-    """Engineers take the nearest tech building, or wait and look again.
-
-    An agent with no target waits: ending instead frees the trigger at
-    once, so every roll would raise the same idle team again (a probe
-    game raised one 112 times in eight minutes).
-    """
-    return (
-        (_P_TIMEOUT, _DROP_TIMEOUT),
-        (_P_ATTACK_ONCE, T_TECH),
-        (_P_TIMEOUT_STOP, 0),
-        (_P_AREA_GUARD, _AGENT_RETRY),
-        (_JUMP, 1),
-    )
-
-
-def infiltrate(target: int) -> Lines:
-    """A spy enters the nearest building of a class, or waits."""
-    return (
-        (_P_SKIP_CHANCE, _SPY_SKIP_PERCENT),
-        (_P_ATTACK_ONCE, target),
-        (_P_AREA_GUARD, _AGENT_RETRY),
-        (_JUMP, 1),
-    )
-
-
-def drop(target: int) -> Lines:
-    """Load agents into the team's transport, drive in, unload, enter.
-
-    Vanilla 14 seats the passengers and saves the transport's place, so
-    with `TransportsReturnOnUnload` vanilla 8,2 sends the empty
-    transport home to serve again (Phobos 10103 saves no place).
-    """
-    return (
-        (_LOAD, 0),
-        (_P_MOVE_DISTANCE, _DROP_DISTANCE),
-        (_P_TIMEOUT, _DROP_TIMEOUT),
-        (_P_MOVE_ENEMY, target),
-        (_P_TIMEOUT_STOP, 0),
-        (_UNLOAD, _UNLOAD_KEEP_PASSENGERS),
-        (_P_ATTACK_ONCE, target),
-        (_SUCCESS, 0),
-    )
-
-
-def hijack() -> Lines:
-    """Stage, then take the nearest enemy vehicles (Ares 67)."""
-    return (
-        (_REGROUP_AT_BASE, 0),
-        (_P_TIMEOUT, _STAGE_TIMEOUT),
-        (_GATHER_AT_ENEMY, 0),
-        (_P_TIMEOUT_STOP, 0),
-        (_TAKE_VEHICLES, 0),
-        (_SUCCESS, 0),
-    )
-
-
-def garrison() -> Lines:
-    """Garrison the nearest civilian building, then fight from it."""
-    return ((_GARRISON, 0), (_SUCCESS, 0), (_ATTACK, VEHICLES), (_ATTACK, ANYTHING))
-
-
-def occupy_bunker() -> Lines:
-    """Occupy the house's own battle bunker."""
-    return ((_OCCUPY_BATTLE_BUNKER, 0), (_SUCCESS, 0))
-
-
-def tank_bunker() -> Lines:
-    """Dig into the house's own tank bunker."""
-    return ((_ENTER_TANK_BUNKER, 0), (_SUCCESS, 0))
-
-
-def absorb() -> Lines:
-    """Feed infantry into the house's bio reactor."""
-    return ((_ENTER_BIO_REACTOR, 0), (_SUCCESS, 0))
-
-
-def redeploy() -> Lines:
-    """Deploy the MCV where it stands."""
-    return ((_DEPLOY, 0), (_SUCCESS, 0))
-
-
-def chrono_assault(quarry: int, casts: tuple[int, ...]) -> Lines:
+def chrono_assault(quarry: Quarry, casts: tuple[int, ...]) -> Lines:
     """Jump next to the enemy's greatest threat of a class and fight.
 
     Vanilla 57 waits while the Chronosphere is almost charged and fires
@@ -590,14 +553,13 @@ def chrono_assault(quarry: int, casts: tuple[int, ...]) -> Lines:
     owns.
     """
     return (
-        (_REGROUP_AT_BASE, 0),
-        (_CHRONOSHIFT_TO_THREAT, quarry),
-        (_P_AREA_GUARD, _ARRIVAL_FIGHT),
+        _REGROUP,
+        (_Action.CHRONOSHIFT_TO_THREAT, quarry),
+        _guard(_ARRIVAL_FIGHT),
         *_casts(casts),
-        (_ATTACK, quarry),
-        (_ATTACK, STRUCTURES),
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
+        *_proven(_BREAK_IN, _attack(quarry)),
+        _attack(Quarry.STRUCTURES),
+        *_MOP_UP,
     )
 
 
@@ -609,56 +571,259 @@ def curtain_charge(curtain: int, casts: tuple[int, ...]) -> Lines:
     """
     others = tuple(group for group in casts if group != curtain)
     return (
-        (_REGROUP_AT_BASE, 0),
-        (_P_TIMEOUT, _STAGE_TIMEOUT),
-        (_GATHER_AT_ENEMY, 0),
-        (_P_TIMEOUT_STOP, 0),
+        _REGROUP,
+        *_timed(_STAGE_TIMEOUT, _gather()),
         *_casts(others),
         *_casts((curtain,)),
-        (_P_ATTACK, T_DEFENSES),
-        (_P_ATTACK, T_FACTORIES),
-        (_ATTACK, STRUCTURES),
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
+        *_first_kill(_strike, Target.DEFENSES),
+        _strike(Target.FACTORIES),
+        _attack(Quarry.STRUCTURES),
+        *_MOP_UP,
     )
 
 
 def counter_hunt(target_list: int) -> Lines:
     """Hunt every enemy unit in an `[AITargetTypes]` list.
 
-    The trigger's weight rises when the team kills one (Phobos 14000).
+    The trigger's weight rises at once when the team kills one (Phobos
+    14000).
     """
     return (
-        (_REGROUP_AT_BASE, 0),
-        (_P_REWARD, _REWARD),
-        (_P_ATTACK_LIST_THREAT, target_list),
-        (_P_AREA_GUARD, _COUNTER_PAUSE),
-        (_ATTACK, ANYTHING),
+        _REGROUP,
+        (_Action.REWARD, _REWARD),
+        *_first_kill(_strike_listed, target_list),
+        _guard(_COUNTER_PAUSE),
+        *_MOP_UP,
     )
 
 
+# --- Raids -----------------------------------------------------------
+
+
+def _raid(percent: int, first: Target, second: Target, *later: Target) -> Lines:
+    """Phobos attack lines on two classes, in an order a raid rolls."""
+
+    def opening(target: Target, other: Target) -> Lines:
+        return (*_first_kill(_strike, target), _strike(other))
+
+    return (
+        _Draft()
+        .then(_REGROUP)
+        .either(percent, opening(first, second), opening(second, first))
+        .then(*map(_strike, later), *_MOP_UP)
+        .done()
+    )
+
+
+def blitz() -> Lines:
+    """Fast units straight at the factories, then the yard."""
+    return _raid(50, Target.VEHICLE_FACTORY, Target.BARRACKS, Target.CONSTRUCTION_YARD)
+
+
+def economy_raid() -> Lines:
+    """Harvesters and refineries, in an order each raid rolls."""
+    return _raid(60, Target.ORE_MINERS, Target.ECONOMY)
+
+
+def power_raid() -> Lines:
+    """Black out the base: power plants and radar, in either order."""
+    return _raid(60, Target.POWER, Target.RADAR)
+
+
+def feint() -> Lines:
+    """Draw the defence off: hit the enemy's farthest buildings."""
+    return (
+        _Draft()
+        .then(_REGROUP)
+        .either(
+            50,
+            _first_kill(_strike_farther, Target.POWER),
+            _first_kill(_strike_farther, Target.STRUCTURES),
+        )
+        .then(*_MOP_UP)
+        .done()
+    )
+
+
+def bombing(first: Quarry, second: Quarry) -> Lines:
+    """Bomb planters walk up to two classes, in an order they roll.
+
+    Vanilla quarries: a planter's bomb does the damage, not its weapon,
+    and Phobos, judging the leader's weapon, found nothing for an
+    Arsonist or a Repulsor to attack in play.
+    """
+
+    def opening(quarry: Quarry, other: Quarry) -> Lines:
+        return (*_proven(_RAID_PROOF, _attack(quarry)), _attack(other))
+
+    return (
+        _Draft()
+        .then(_REGROUP)
+        .either(50, opening(first, second), opening(second, first))
+        .then(_attack(first), _attack(second), *_MOP_UP)
+        .done()
+    )
+
+
+def air_strike(first: Quarry, second: Quarry) -> Lines:
+    """Two vanilla quarries, in an order each strike rolls.
+
+    Vanilla quarries, as MO's own air teams use: a Phobos attack line
+    found no target for Comanches in a probe game and the team hovered
+    in place. Vanilla `0,q` repeats until the class is gone, and the
+    engine sends the craft to rearm and back. A squadron still flying
+    after a strike on each class is a success: one the enemy's
+    anti-air shoots down first is not, and its trigger loses weight.
+    Both strikes come before the mark, so a class with nothing in it
+    does not hand the squadron its success unfought.
+    """
+
+    def opening(quarry: Quarry, other: Quarry) -> Lines:
+        return (
+            *_timed(_SORTIE, _attack(quarry)),
+            *_proven(_SORTIE, _attack(other)),
+        )
+
+    return (
+        _Draft()
+        .either(65, opening(first, second), opening(second, first))
+        .then(_attack(first), _attack(second), *_MOP_UP)
+        .done()
+    )
+
+
+# --- Holding ground --------------------------------------------------
+
+
+def watch(casts: tuple[int, ...]) -> Lines:
+    """Guard the base front, casting home superweapons each round."""
+    return (_REGROUP, *_casts(casts), _guard(_WATCH), _jump(2))
+
+
+def patrol() -> Lines:
+    """Walk between refineries and power plants, guarding at each."""
+    return (
+        (_Action.MOVE_TO_OWN, Target.REFINERY),
+        _guard(_PATROL_STOP),
+        (_Action.MOVE_TO_OWN, Target.POWER),
+        _guard(_PATROL_STOP),
+        _jump(1),
+    )
+
+
+def tech_guard() -> Lines:
+    """Hold the tech buildings the house has taken."""
+    return ((_Action.MOVE_TO_OWN, Target.TECH), _guard(_WATCH), _jump(1))
+
+
+def garrison() -> Lines:
+    """Garrison the nearest civilian building, then fight from it."""
+    return ((_Action.GARRISON, 0), _attack(Quarry.VEHICLES), *_MOP_UP)
+
+
+def occupy_bunker() -> Lines:
+    """Occupy the house's own battle bunker."""
+    return ((_Action.OCCUPY_BATTLE_BUNKER, 0),)
+
+
+def tank_bunker() -> Lines:
+    """Dig into the house's own tank bunker."""
+    return ((_Action.ENTER_TANK_BUNKER, 0),)
+
+
+def absorb() -> Lines:
+    """Feed infantry into the house's bio reactor."""
+    return ((_Action.ENTER_BIO_REACTOR, 0),)
+
+
+def redeploy() -> Lines:
+    """Deploy the MCV where it stands."""
+    return (_DEPLOY,)
+
+
+# --- Agents ----------------------------------------------------------
+
+
+def capture_tech() -> Lines:
+    """Engineers take the nearest tech building, one after another."""
+    return _tries(*_timed(_DROP_TIMEOUT, _strike(Target.TECH, once=True)))
+
+
+def bridge_repair() -> Lines:
+    """An engineer mends the nearest broken bridge, or waits for one."""
+    return (
+        _strike(Target.BROKEN_BRIDGE_HUT, once=True),
+        _guard(_AGENT_RETRY),
+        _jump(1),
+    )
+
+
+def infiltrate(target: Target) -> Lines:
+    """A spy enters the nearest building of a class.
+
+    Each try is skipped with a chance, so spies do not all set out the
+    moment they are trained.
+    """
+    return _tries((_Action.SKIP_CHANCE, _SPY_SKIP_PERCENT), _strike(target, once=True))
+
+
+def drop(target: Target) -> Lines:
+    """Load agents into the team's transport, drive in, unload, enter.
+
+    Vanilla 14 seats the passengers and saves the transport's place, so
+    with `TransportsReturnOnUnload` vanilla 8,2 sends the empty
+    transport home to serve again (Phobos 10103 saves no place). The
+    agents on the ground by their target are the success.
+    """
+    return (
+        _LOAD,
+        (_Action.MOVE_DISTANCE, _DROP_DISTANCE),
+        *_timed(_DROP_TIMEOUT, (_Action.MOVE_TO_ENEMY, target)),
+        _UNLOAD,
+        _SUCCESS,
+        _strike(target, once=True),
+    )
+
+
+def hijack() -> Lines:
+    """Stage, then take the nearest enemy vehicles (Ares 67)."""
+    return (_REGROUP, *_timed(_STAGE_TIMEOUT, _gather()), _TAKE_VEHICLES)
+
+
+# --- At sea ----------------------------------------------------------
+
+
 def naval_line() -> Lines:
-    """Stage at sea; ships and defences in either order; the shore."""
-    order = _either_order(60, (_P_ATTACK, T_NAVAL_UNITS), (_P_ATTACK, T_DEFENSES))
+    """Stage at sea, then fight whatever the fleet can reach.
+
+    Vanilla quarries, as MO's own fleets use: the engine gives each
+    ship a target it can hit. A Phobos line asks the leader, and a
+    submarine leading found nothing on shore for the ships behind it
+    (36 times for one team type in a probe game).
+    """
     return (
         _stage(closer=0)
-        .maybe(70, (_P_AREA_GUARD, _STAGE_FIGHT))
-        .then(*order.lines, (_ATTACK, STRUCTURES), *_finish())
+        .maybe(70, _guard(_STAGE_FIGHT))
+        .then(
+            *_proven(_BREAK_IN, _attack(Quarry.ANYTHING)),
+            _attack(Quarry.STRUCTURES),
+            *_MOP_UP,
+        )
         .done()
     )
 
 
 def naval_hunt() -> Lines:
-    """Hunt ships and submarines."""
-    return ((_P_ATTACK, T_NAVAL_UNITS), (_SUCCESS, 0), (_ATTACK, ANYTHING))
+    """Hunt ships and submarines (to a ship, the vehicles in reach)."""
+    hunt = _attack(Quarry.VEHICLES)
+    return (*_proven(_BREAK_IN, hunt), hunt, *_MOP_UP)
 
 
 def naval_bombard() -> Lines:
     """Shell the coastal defences, then the base."""
     return (
-        (_P_ATTACK, T_DEFENSES),
-        (_P_ATTACK, T_FACTORIES),
-        (_ATTACK, STRUCTURES),
-        (_SUCCESS, 0),
-        (_ATTACK, ANYTHING),
+        *_proven(_BREAK_IN, _attack(Quarry.DEFENSES)),
+        _attack(Quarry.DEFENSES),
+        _attack(Quarry.STRUCTURES),
+        *_MOP_UP,
     )

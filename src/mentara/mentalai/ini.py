@@ -11,9 +11,11 @@ from dataclasses import dataclass
 from typing import Final
 lazy from collections.abc import Mapping
 
-__all__ = ["IniData", "split_list"]
+__all__ = ["IniData", "parse_number", "split_list"]
 
 _COMMENT: Final[str] = ";"
+# A flag is on when its value starts with one of these (yes, true, 1).
+_ON: Final[frozenset[str]] = frozenset("yt1")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +98,73 @@ class IniData:
         keys = self.sections.get(section.lower())
         return None if keys is None else keys.get(key.lower())
 
+    def flag(self, section: str, key: str, *, default: bool = False) -> bool:
+        """A yes-or-no key, as the engine reads one.
+
+        Args:
+            section: Section name, any case.
+            key: Key name, any case.
+            default: The answer when the key is absent or empty.
+
+        Returns:
+            True when the value starts with `y`, `t` or `1`.
+        """
+        value = self.get(section, key)
+        if value is None or value == "":
+            return default
+        return value[0].lower() in _ON
+
+    def number(self, section: str, key: str, default: float = 0.0) -> float:
+        """A numeric key; a trailing percent sign is dropped.
+
+        Args:
+            section: Section name, any case.
+            key: Key name, any case.
+            default: The number when the key is absent or not one.
+
+        Returns:
+            The value as a float.
+        """
+        return parse_number(self.get(section, key), default)
+
+    def integer(self, section: str, key: str, default: int = 0) -> int:
+        """A numeric key, truncated to an integer.
+
+        Args:
+            section: Section name, any case.
+            key: Key name, any case.
+            default: The number when the key is absent or not one.
+
+        Returns:
+            The value as an int.
+        """
+        return int(self.number(section, key, float(default)))
+
+    def token(self, section: str, key: str, default: str = "") -> str:
+        """A keyword key, lower-cased for comparison.
+
+        Args:
+            section: Section name, any case.
+            key: Key name, any case.
+            default: The keyword when the key is absent or empty.
+
+        Returns:
+            The value in lower case.
+        """
+        return (self.get(section, key) or default).lower()
+
+    def listed(self, section: str, key: str) -> tuple[str, ...]:
+        """The items of a comma-separated key.
+
+        Args:
+            section: Section name, any case.
+            key: Key name, any case.
+
+        Returns:
+            The stripped, non-empty items; none when the key is absent.
+        """
+        return split_list(self.get(section, key))
+
     def name(self, section: str) -> str:
         """A section's own spelling, or the name given if it has none.
 
@@ -139,6 +208,24 @@ class IniData:
             seen.add(value.lower())
             listed.append(value)
         return tuple(listed)
+
+
+def parse_number(value: str | None, default: float = 0.0) -> float:
+    """Read an INI value as a number.
+
+    Args:
+        value: The raw value, or None.
+        default: The number for a missing or malformed value.
+
+    Returns:
+        The value as a float, a trailing percent sign dropped.
+    """
+    if value is None:
+        return default
+    try:
+        return float(value.strip().rstrip("%"))
+    except ValueError:
+        return default
 
 
 def split_list(value: str | None) -> tuple[str, ...]:

@@ -8,12 +8,16 @@ trigger, and the map's own triggers run instead.
 """
 
 import struct
-from typing import TYPE_CHECKING, Final
-lazy from collections.abc import Iterable
+from typing import Final
+lazy from collections.abc import Iterable, Mapping
 
-if TYPE_CHECKING:
-    from mentara.mentalai.model import AIPlan, TaskForce, TeamType, Trigger
-    from mentara.mentalai.scripts import Script
+lazy from mentara.mentalai.model import (
+    AIPlan,
+    ScriptType,
+    TaskForce,
+    TeamType,
+    Trigger,
+)
 
 __all__ = ["render_ai_fragment", "render_option_fragment", "render_rules_fragment"]
 
@@ -21,12 +25,24 @@ _COMPARATOR: Final[struct.Struct] = struct.Struct("<II")
 # A comparator is 32 bytes in hex; only its first two words count.
 _COMPARATOR_HEX_LENGTH: Final[int] = 64
 _TRIGGER_TECH_LEVEL: Final[int] = 1
-_NO_TEAM: Final[str] = "<none>"
-# Turnover. Hard, Normal, Easy: the cap on teams at once, MO's 100,75,50
-# raised for the larger pool; base-defence members join other teams
-# when theirs ends (Phobos), instead of idling.
+# How the engine spells "no object" and a flag.
+_NONE: Final[str] = "<none>"
+_FLAG: Final[Mapping[bool, str]] = frozendict({True: "yes", False: "no"})
+# One priority for every team: a higher one takes members out of
+# running teams of a lower one (see `Conduct`).
+_PRIORITY: Final[int] = 5
+# Turnover. The AI builds for its oldest unfilled team first and hands
+# each new unit to the oldest team that wants it (gamemd 0x55B502 walks
+# the teams in creation order; Phobos `UpdateVehicleProduction`), so a
+# team waits while every older one fills. The cap on teams at once
+# (Hard, Normal, Easy; MO's is 100,75,50 for teams half the size) keeps
+# that wait short; an empty team keeps its turn three times as long as
+# MO's 5000 frames, or a squad of one contended type is dissolved
+# before its first member comes; and members of an ended team join
+# other teams (Phobos) instead of idling.
 _GENERAL: Final[tuple[tuple[str, str], ...]] = (
-    ("TotalAITeamCap", "150,115,80"),
+    ("TotalAITeamCap", "80,60,40"),
+    ("DissolveUnfilledTeamDelay", "15000"),
     ("SetRecruitableOnLiberate", "1"),
 )
 
@@ -100,7 +116,7 @@ def render_option_fragment(plan: AIPlan) -> str:
     enabled = (f"{t.id}=yes" for t in plan.triggers)
     blocks.append(_section("AITriggerTypesEnable", enabled))
     units = [
-        _unit(unit, rank, unique=unit in plan.unique)
+        _unit(unit, rank, docked=unit in plan.docked)
         for unit, rank in plan.leadership.items()
     ]
     if units:
@@ -124,9 +140,9 @@ def render_rules_fragment(plan: AIPlan) -> str:
     return _RULES_HEADER + "\n" + _section("AITargetTypes", lists) + "\n"
 
 
-def _unit(unit: str, rank: int, *, unique: bool) -> str:
+def _unit(unit: str, rank: int, *, docked: bool) -> str:
     lines = [f"LeadershipRating={rank}"]
-    if unique:
+    if docked:
         lines.append("ForbidParallelAIQueues=true")
     return _section(unit, lines)
 
@@ -148,16 +164,12 @@ def _task_force(task_force: TaskForce) -> str:
     return _section(task_force.id, lines)
 
 
-def _script(script: Script) -> str:
+def _script(script: ScriptType) -> str:
     lines = (
         f"{index}={action},{argument}"
         for index, (action, argument) in enumerate(script.lines)
     )
     return _section(script.id, (f"Name={script.name}", *lines))
-
-
-def _yes_no(*, value: bool) -> str:
-    return "yes" if value else "no"
 
 
 def _team(team: TeamType) -> str:
@@ -168,30 +180,30 @@ def _team(team: TeamType) -> str:
         ("MindControlDecision", str(int(conduct.mind_control))),
         ("Loadable", "no"),
         ("Full", "no"),
-        ("Annoyance", _yes_no(value=conduct.annoyance)),
-        ("GuardSlower", _yes_no(value=conduct.guard_slower)),
-        ("House", _NO_TEAM),
-        ("Recruiter", _yes_no(value=conduct.recruiter)),
+        ("Annoyance", _FLAG[conduct.annoyance]),
+        ("GuardSlower", _FLAG[conduct.guard_slower]),
+        ("House", _NONE),
+        ("Recruiter", _FLAG[conduct.recruiter]),
         ("Autocreate", "yes"),
         ("Prebuild", "no"),
-        ("Reinforce", _yes_no(value=conduct.reinforce)),
+        ("Reinforce", _FLAG[conduct.reinforce]),
         ("Droppod", "no"),
         ("UseTransportOrigin", "no"),
         ("Whiner", "no"),
         ("LooseRecruit", "no"),
-        ("Aggressive", _yes_no(value=conduct.aggressive)),
-        ("Suicide", _yes_no(value=conduct.suicide)),
-        ("Priority", str(conduct.priority)),
+        ("Aggressive", _FLAG[conduct.aggressive]),
+        ("Suicide", _FLAG[conduct.suicide]),
+        ("Priority", str(_PRIORITY)),
         ("Max", str(team.max_teams)),
         ("TechLevel", "0"),
         ("Group", "-1"),
         ("OnTransOnly", "no"),
-        ("AvoidThreats", _yes_no(value=conduct.avoid_threats)),
+        ("AvoidThreats", _FLAG[conduct.avoid_threats]),
         ("IonImmune", "no"),
-        ("TransportsReturnOnUnload", _yes_no(value=conduct.transports_return)),
-        ("AreTeamMembersRecruitable", _yes_no(value=conduct.recruitable)),
-        ("IsBaseDefense", _yes_no(value=conduct.base_defense)),
-        ("OnlyTargetHouseEnemy", _yes_no(value=conduct.enemy_only)),
+        ("TransportsReturnOnUnload", _FLAG[conduct.transports_return]),
+        ("AreTeamMembersRecruitable", "yes"),
+        ("IsBaseDefense", _FLAG[conduct.base_defense]),
+        ("OnlyTargetHouseEnemy", _FLAG[conduct.enemy_only]),
         ("Script", team.script),
         ("TaskForce", team.task_force),
     )
@@ -202,22 +214,23 @@ def _trigger(trigger: Trigger) -> str:
     gate = trigger.gate
     comparator = _COMPARATOR.pack(gate.amount, int(gate.comparison)).hex()
     weight = float(trigger.weight)
+    low, high = (weight, weight) if trigger.steady else (weight / 2, weight * 2)
     fields = (
         trigger.name,
         trigger.team,
         trigger.country,
         str(_TRIGGER_TECH_LEVEL),
         str(int(gate.condition)),
-        gate.building,
+        gate.subject or _NONE,
         comparator.ljust(_COMPARATOR_HEX_LENGTH, "0"),
         f"{weight:.6f}",
-        f"{weight / 2:.6f}",
-        f"{weight * 2:.6f}",
+        f"{low:.6f}",
+        f"{high:.6f}",
         "1",  # IsForSkirmish
         "0",
         str(trigger.side),
         "1" if trigger.base_defense else "0",
-        trigger.support,
+        trigger.support or _NONE,
         "1",  # Easy
         "1",  # Normal
         "1",  # Hard
